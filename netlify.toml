@@ -1,0 +1,146 @@
+[build]
+  functions = "netlify/functions"
+
+# Страховка: гарантируем, что база фактов попадёт в бандл функции answer,
+# даже если бандлер не проследит require('./facts-db.json').
+[functions]
+  included_files = ["netlify/functions/facts-db.json"]
+
+# ---------------------------------------------------------------------------
+# ЛИМИТ ЧАСТОТЫ ЗАПРОСОВ (rate limit).
+#
+# Фронтенд обращается к функциям не напрямую, а через /api/* — эти правила
+# редиректа проксируют путь на функцию и считают запросы НА ГРАНИЦЕ Netlify,
+# до её запуска. Поэтому перебор не тратит ни вызовы функций, ни квоты Groq:
+# лишние запросы отсекаются раньше кода.
+#
+# Почему именно редиректы: лимит доступен на всех тарифах Netlify, но в
+# netlify.toml его можно задать ТОЛЬКО для редиректов. Для самих функций
+# правило живёт в экспортируемом config V2-функции, а наши четыре функции —
+# V1 (exports.handler). Перевод на V2 — отдельная задача.
+#
+# window_size — окно в секундах (максимум 180), window_limit — сколько
+# запросов в этом окне разрешено. aggregate_by = ["ip", "domain"] считает по
+# IP в пределах нашего домена; ["domain"] в одиночку доступен только на
+# Enterprise, поэтому не используем.
+#
+# Числа взяты с запасом: и киоск, и посетители со своих телефонов могут
+# выходить через один NAT, то есть с одного IP. Один вопрос = 1 stt +
+# 1 answer + 1 photo + 1-2 tts, то есть ~5 запросов.
+# ---------------------------------------------------------------------------
+
+# Текстовый ответ: самый дорогой путь (Wikipedia + Groq LLM).
+[[redirects]]
+  from = "/api/answer"
+  to = "/.netlify/functions/answer"
+  status = 200
+  force = true
+  [redirects.rate_limit]
+  window_limit = 20
+  window_size = 60
+  aggregate_by = ["ip", "domain"]
+
+# Распознавание речи: приходит base64-аудио, разбор дорогой.
+[[redirects]]
+  from = "/api/stt"
+  to = "/.netlify/functions/stt"
+  status = 200
+  force = true
+  [redirects.rate_limit]
+  window_limit = 20
+  window_size = 60
+  aggregate_by = ["ip", "domain"]
+
+# Озвучка: два вызова на ответ (речь аватара и повтор кнопкой).
+[[redirects]]
+  from = "/api/tts"
+  to = "/.netlify/functions/tts"
+  status = 200
+  force = true
+  [redirects.rate_limit]
+  window_limit = 40
+  window_size = 60
+  aggregate_by = ["ip", "domain"]
+
+# Фото: результаты кэшируются в функции, можно чуть щедрее.
+[[redirects]]
+  from = "/api/photo"
+  to = "/.netlify/functions/photo"
+  status = 200
+  force = true
+  [redirects.rate_limit]
+  window_limit = 30
+  window_size = 60
+  aggregate_by = ["ip", "domain"]
+
+# ---------------------------------------------------------------------------
+# ЗАГОЛОВКИ БЕЗОПАСНОСТИ.
+#
+# Ниже два разных набора: жёсткие заголовки, которые ничего не могут сломать,
+# и политика CSP — пока в режиме ТОЛЬКО ОТЧЁТ (см. отдельный комментарий).
+#
+# Чего здесь СПЕЦИАЛЬНО нет:
+#   • Cross-Origin-Embedder-Policy — он требует CORP-заголовков от каждого
+#     внешнего ресурса (jsDelivr, шрифты Google, картинки Wikimedia); один
+#     ресурс без него — и страница остаётся без 3D-модели или без фото.
+#   • X-XSS-Protection — устаревший заголовок, современные браузеры его
+#     игнорируют, а в старых он сам был источником уязвимостей.
+# ---------------------------------------------------------------------------
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Запрет угадывать тип файла по содержимому: .json не станет скриптом.
+    X-Content-Type-Options = "nosniff"
+    # Referer не уходит никуда, в том числе на Wikimedia (у <img> в разметке
+    # стоит тот же referrerpolicy="no-referrer" — здесь это правило для всей
+    # страницы, а не для одной картинки).
+    Referrer-Policy = "no-referrer"
+    # Киоск нельзя встраивать в чужой iframe: это защита от кликджекинга,
+    # когда поверх нашей кнопки микрофона рисуют чужую.
+    X-Frame-Options = "DENY"
+    # Микрофон нужен самой странице и остаётся разрешённым; остальные
+    # мощные API отключены полностью, включая вложенные iframe.
+    Permissions-Policy = "microphone=(self), camera=(), geolocation=(), payment=(), usb=(), midi=(), magnetometer=(), accelerometer=()"
+    # Страница не открывает окон и не участвует в OAuth, поэтому изоляцию
+    # контекста включаем без риска что-то сломать.
+    Cross-Origin-Opener-Policy = "same-origin"
+
+# ---------------------------------------------------------------------------
+# CSP — ПОЛИТИКА БЕЗОПАСНОСТИ КОНТЕНТА, ПОКА В РЕЖИМЕ «ТОЛЬКО ОТЧЁТ».
+#
+# Заголовок называется Content-Security-Policy-Report-Only: браузер ПРОВЕРЯЕТ
+# политику и пишет нарушения в консоль, но ничего не блокирует. Так сделано
+# намеренно: ошибка в CSP не ломает страницу постепенно, она ломает её сразу
+# и целиком (3D-модель, шрифты, фото или озвучка просто не грузятся), а
+# проверить это можно только в живом браузере.
+#
+# КАК ВКЛЮЧИТЬ ЗАЩИТУ: открыть киоск, задать вопрос голосом, дождаться ответа
+# с фото и озвучкой, посмотреть консоль DevTools. Если строк
+# «Content Security Policy» там нет — убрать из имени заголовка суффикс
+# `-Report-Only`. Если нарушения есть, в каждой строке указана директива,
+# которой не хватило: её и надо дополнить, а не отключать политику целиком.
+#
+# Откуда взялся каждый источник (всё проверено по коду index.html):
+#   script-src  'unsafe-inline' — на странице три inline-скрипта: importmap,
+#               классический блок и модуль перед </body>. Без nonce (а на
+#               статике Netlify его негде взять) inline-код иначе не запустить.
+#               blob: — es-module-shims на старых iOS переписывает импорты и
+#               выполняет модули как blob-URL (это его штатный CSP-режим, без
+#               unsafe-eval). 'wasm-unsafe-eval' — basis-транскодер KTX2 и
+#               MeshoptDecoder компилируют WebAssembly; это не eval для JS.
+#               jsDelivr — оттуда сам шим и three.js по карте импортов.
+#   style-src   'unsafe-inline' — в <head> лежит блок <style> (атрибутов
+#               style="" в разметке нет ни одного). Плюс шрифты Google.
+#   connect-src jsDelivr нужен именно здесь: шим СКАЧИВАЕТ исходники модулей
+#               через fetch, прежде чем выполнить их. 'self' закрывает /api/*.
+#   img-src     data: — SVG-шум фона зашит в CSS. upload.wikimedia.org — это
+#               реальный хост из полей thumburl/url ответа Wikimedia (проверено
+#               живым запросом). thumb.wikimedia.org добавлен на запас: сейчас
+#               Wikimedia отдаёт его в HTML-фрагментах лицензий, и если хост
+#               однажды появится в thumburl, фото не пропадёт.
+#   media-src   blob: — озвучка приходит из функции tts и проигрывается через
+#               URL.createObjectURL, то есть с нашего же origin.
+#   worker-src  blob: — KTX2Loader и meshopt поднимают воркеры из blob.
+#   manifest-src задел под PWA-манифест следующего этапа.
+# ---------------------------------------------------------------------------
+    Content-Security-Policy-Report-Only = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://upload.wikimedia.org https://thumb.wikimedia.org; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; worker-src blob:; manifest-src 'self'"

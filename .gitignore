@@ -1,0 +1,5 @@
+# Local Netlify folder
+.netlify
+
+# Локальные снимки перед правками — история хранится в git
+.backup-*/

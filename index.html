@@ -1,0 +1,1841 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tarix yordamchisi — прототип</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+
+<!-- Полифилл importmap + ES-модулей для старых мобильных браузеров. Safari на
+     iOS младше 16.4 НЕ понимает нативный <script type="importmap"> — из-за этого
+     на таких iPhone модуль Three.js не стартовал вовсе, и вместо 3D-аватара
+     оставалась запасная буква «Т». es-module-shims включается ТОЛЬКО там, где
+     нативной поддержки нет; на современных браузерах он определяет её и молча
+     уходит в сторону, ничего не замедляя. Грузим с того же jsDelivr. -->
+<script async src="https://cdn.jsdelivr.net/npm/es-module-shims@2.8.4/dist/es-module-shims.js" crossorigin="anonymous"></script>
+
+<!-- Карта импортов для Three.js без сборки. Версия 0.169.0 закреплена жёстко,
+     чтобы совпадать с локальным basis-транскодером в three/basis/ (иначе KTX2
+     текстуры модели не раскодируются). Загружается с jsDelivr; сама 3D-логика
+     ниже, в модульном <script> перед </body>. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+  :root{
+    --paper:#ECE3CE;
+    --card:#F8F3E6;
+    --ink:#1E2A44;
+    --ink-soft:#4C5A7A;
+    --gold:#B8862E;
+    --gold-soft:#D9BE83;
+    --turquoise:#1E6E68;
+    --brick:#A84B2A;
+    --line: rgba(30,42,68,0.16);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    min-height:100vh;
+    background:var(--paper);
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(184,134,46,0.08), transparent 40%),
+      radial-gradient(circle at 85% 90%, rgba(30,110,104,0.08), transparent 45%);
+    font-family:'Inter', sans-serif;
+    color:var(--ink);
+    display:flex;
+    align-items:flex-start;
+    justify-content:center;
+    padding:40px 16px;
+  }
+  .stage{
+    width:100%;
+    max-width:520px;
+  }
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--ink-soft);
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:10px;
+  }
+  .counter-pill{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:999px;
+    padding:4px 10px;
+    color:var(--ink);
+  }
+  .titles{
+    text-align:center;
+    margin-bottom:14px;
+  }
+  .title-uz{
+    font-family:'Spectral', serif;
+    font-weight:600;
+    font-size:26px;
+    margin:0;
+  }
+  .title-ru{
+    font-family:'Spectral', serif;
+    font-weight:500;
+    font-size:15px;
+    color:var(--ink-soft);
+    margin:4px 0 0;
+  }
+  .tile-band{
+    height:10px;
+    border-radius:3px;
+    margin:18px 0 22px;
+    background:
+      repeating-linear-gradient(45deg, var(--gold) 0 8px, transparent 8px 16px),
+      repeating-linear-gradient(-45deg, var(--turquoise) 0 8px, transparent 8px 16px),
+      var(--brick);
+  }
+  /* Ряд переключателей: слева язык, справа голос. Обе группы — одинаковые
+     таблетки, потому что делают одно и то же (переключают режим киоска), и
+     посетителю не нужно разбираться в двух разных элементах вместо одного.
+     Общий нижний отступ переехал сюда с .lang-switch. */
+  .switch-row{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    align-items:center;
+    gap:10px 20px;
+    margin-bottom:22px;
+  }
+  .switch-group{
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  /* Подпись у группы голоса: без неё «Женский / Мужской» читается как выбор
+     аватара, а не голоса. Язык подписывать не нужно — «Русский / O'zbekcha»
+     говорит за себя. Стиль — тот же mono-eyebrow, что в шапке карточки. */
+  .switch-label{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10px;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--ink-soft);
+  }
+  .lang-switch{
+    display:flex;
+    justify-content:center;
+    gap:6px;
+  }
+  .lang-switch button{
+    font-family:'Inter', sans-serif;
+    font-size:12px;
+    font-weight:600;
+    letter-spacing:0.02em;
+    padding:6px 14px;
+    border-radius:999px;
+    border:1px solid var(--line);
+    background:transparent;
+    color:var(--ink-soft);
+    cursor:pointer;
+  }
+  .lang-switch button.active{
+    background:var(--ink);
+    border-color:var(--ink);
+    color:var(--paper);
+  }
+  .kiosk-card{
+    position:relative;
+    overflow:hidden;
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:20px;
+    padding:34px 24px 26px;
+    text-align:center;
+    box-shadow:0 1px 0 rgba(30,42,68,0.04);
+  }
+  .kiosk-card::before{
+    content:"";
+    position:absolute;
+    inset:0;
+    opacity:0.05;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .kiosk-card > *{ position:relative; z-index:1; }
+  .corner{
+    position:absolute;
+    width:16px;
+    height:16px;
+    border:2px solid var(--gold);
+    opacity:0.6;
+    z-index:1;
+  }
+  .corner-tl{ top:10px; left:10px; border-right:none; border-bottom:none; }
+  .corner-tr{ top:10px; right:10px; border-left:none; border-bottom:none; }
+  .corner-bl{ bottom:10px; left:10px; border-right:none; border-top:none; }
+  .corner-br{ bottom:10px; right:10px; border-left:none; border-top:none; }
+  .medallion{
+    position:relative;
+    width:104px;
+    height:104px;
+    border-radius:50%;
+    border:none;
+    background:var(--ink);
+    color:var(--gold-soft);
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    margin:0 auto;
+    transition:transform .15s ease;
+  }
+  .medallion:active{ transform:scale(0.97); }
+  .medallion svg{ width:36px; height:36px; }
+  .ring{
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    border:2px solid var(--turquoise);
+    opacity:0;
+  }
+  .medallion.listening .ring{
+    animation: ripple 1.6s ease-out infinite;
+  }
+  .medallion.listening .ring:nth-child(2){ animation-delay:.5s; }
+  .medallion.listening .ring:nth-child(3){ animation-delay:1s; }
+  @keyframes ripple{
+    0%{ transform:scale(1); opacity:0.55; }
+    100%{ transform:scale(1.9); opacity:0; }
+  }
+  .hint{
+    font-size:13px;
+    color:var(--ink-soft);
+    margin:16px 0 18px;
+  }
+  .fallback-row{
+    display:flex;
+    gap:8px;
+    margin-bottom:6px;
+  }
+  .fallback-row input{
+    flex:1;
+    font-family:'Inter', sans-serif;
+    font-size:13px;
+    padding:10px 12px;
+    border-radius:10px;
+    border:1px solid var(--line);
+    background:#fff;
+    color:var(--ink);
+  }
+  .fallback-row button{
+    font-family:'Inter', sans-serif;
+    font-size:13px;
+    font-weight:600;
+    padding:10px 16px;
+    border-radius:10px;
+    border:none;
+    background:var(--turquoise);
+    color:#fff;
+    cursor:pointer;
+  }
+  .fallback-note{
+    font-size:11px;
+    color:var(--ink-soft);
+    opacity:0.8;
+  }
+  .result-card{
+    margin-top:26px;
+    text-align:left;
+    border-top:1px solid var(--line);
+    padding-top:22px;
+  }
+  .result-card.hidden{ display:none; }
+  .question-echo{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    color:var(--ink-soft);
+    margin:0 0 14px;
+  }
+  /* Рамка держит место ДО прихода картинки: фото ищется отдельным запросом
+     (/photo) и догоняет уже показанный ответ. Пропорция вместо фиксированной
+     высоты — карточка не «прыгает», и рамка одинаково живёт в портретном
+     киоске и в ландшафтном. */
+  .result-photo-frame{
+    width:100%;
+    aspect-ratio:16 / 10;
+    max-height:min(34vh, 280px);
+    border-radius:14px;
+    overflow:hidden;
+    position:relative;
+    margin-bottom:10px;
+    background:var(--paper);
+    box-shadow:0 0 0 1px var(--line);
+  }
+  /* Фото и заглушка лежат друг на друге. Раньше заглушку прятало только
+     обрезание по overflow (высота была фиксированной) — при любой смене
+     высоты рамки она обнажалась под картинкой. */
+  .result-photo,
+  .result-photo-placeholder{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+  }
+  .result-photo{
+    object-fit:cover;
+    filter:sepia(0.12) contrast(1.03);
+    opacity:0;
+    transition:opacity 260ms ease;
+  }
+  /* Проявляем только после успешного load — «битой» картинки не видно. */
+  .result-photo.ready{ opacity:1; }
+  .result-photo-placeholder{
+    background:var(--ink);
+    color:var(--gold-soft);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:'Spectral', serif;
+    font-size:52px;
+  }
+  .result-photo-placeholder.hidden{ display:none; }
+  /* Подпись под фото: автор и лицензия. Киоск стоит в государственном
+     учреждении, поэтому атрибуция Wikimedia видна на экране, а не только в
+     ответе функции. */
+  .photo-credit{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10px;
+    line-height:1.5;
+    color:var(--ink-soft);
+    margin:0 0 14px;
+  }
+  .photo-credit.hidden{ display:none; }
+  .photo-credit a{ color:var(--ink-soft); text-decoration:underline; }
+  .result-topic{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    color:var(--gold);
+    margin:0 0 8px;
+  }
+  .answer-text{
+    font-size:17px;
+    line-height:1.75;
+    margin:0 0 14px;
+  }
+  .source-link{
+    font-size:11px;
+    color:var(--turquoise);
+    text-decoration:none;
+    font-family:'IBM Plex Mono', monospace;
+  }
+  .status-text{
+    font-size:12px;
+    color:var(--ink-soft);
+    margin-top:10px;
+    min-height:16px;
+  }
+  .disclaimer{
+    text-align:center;
+    font-size:11px;
+    color:var(--ink-soft);
+    opacity:0.75;
+    margin-top:18px;
+    line-height:1.5;
+  }
+  .stop-bar{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-top:14px;
+    padding:8px 12px;
+    border-radius:999px;
+    background:var(--paper);
+    border:1px solid var(--line);
+  }
+  .stop-bar.hidden{ display:none; }
+  .pulse-dot{
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:var(--turquoise);
+    flex-shrink:0;
+    animation: pulse-dot 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse-dot{
+    0%,100%{ opacity:0.4; transform:scale(0.85); }
+    50%{ opacity:1; transform:scale(1); }
+  }
+  .stop-bar span.stop-label{
+    font-size:12px;
+    color:var(--ink-soft);
+    flex:1;
+  }
+  .stop-bar button{
+    font-family:'Inter', sans-serif;
+    font-size:11px;
+    font-weight:600;
+    padding:5px 12px;
+    border-radius:999px;
+    border:1px solid var(--brick);
+    background:transparent;
+    color:var(--brick);
+    cursor:pointer;
+  }
+  .paywall{
+    position:fixed;
+    inset:0;
+    /* Заведомо верхний слой: перекрывает 3D-канвас аватара и все absolute-слои
+       (во всём файле нет z-index выше 1), плюс запас на будущие элементы. */
+    z-index:2147483000;
+    background:rgba(30,42,68,0.55);
+    /* Затемняющая подложка размывает фон — модалка визуально «поверх всего». */
+    backdrop-filter:blur(3px);
+    -webkit-backdrop-filter:blur(3px);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+  }
+  .paywall.hidden{ display:none; }
+  .paywall-card{
+    background:var(--card);
+    border-radius:18px;
+    max-width:340px;
+    width:100%;
+    padding:30px 26px 24px;
+    text-align:center;
+    border-top:5px solid var(--brick);
+  }
+  .paywall-card h2{
+    font-family:'Spectral', serif;
+    font-size:20px;
+    margin:0 0 10px;
+  }
+  .paywall-card p{
+    font-size:13px;
+    color:var(--ink-soft);
+    line-height:1.6;
+    margin:0 0 20px;
+  }
+  .paywall-card .upgrade{
+    width:100%;
+    padding:12px;
+    border:none;
+    border-radius:10px;
+    background:var(--ink);
+    color:var(--gold-soft);
+    font-family:'Inter', sans-serif;
+    font-weight:600;
+    font-size:14px;
+    cursor:pointer;
+    margin-bottom:10px;
+  }
+  .paywall-card .demo-reset{
+    background:none;
+    border:none;
+    font-size:11px;
+    color:var(--ink-soft);
+    text-decoration:underline;
+    cursor:pointer;
+    font-family:'IBM Plex Mono', monospace;
+  }
+
+  /* ── 3D-аватар (портрет-медальон в форме арки-михраба) ────────────── */
+  .avatar-stage{
+    position:relative;
+    width:min(220px, 64%);
+    aspect-ratio:1 / 1.15;
+    margin:0 auto 20px;
+    /* Арка сверху, мягкое скругление снизу — восточный силуэт михраба. */
+    border-radius:50% 50% 16px 16px;
+    border:2px solid var(--gold);
+    background:var(--ink);
+    overflow:hidden;
+    box-shadow:inset 0 0 26px rgba(0,0,0,0.45), 0 2px 10px rgba(30,42,68,0.12);
+  }
+  .avatar-stage canvas{
+    display:block;
+    width:100%;
+    height:100%;
+  }
+  /* Кольцо-подсветка вокруг медальона, пока идёт распознавание речи. */
+  .avatar-stage::after{
+    content:"";
+    position:absolute;
+    inset:-2px;
+    border-radius:inherit;
+    border:2px solid var(--turquoise);
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .25s ease;
+  }
+  .avatar-stage.is-listening::after{
+    animation: avatar-glow 1.4s ease-in-out infinite;
+  }
+  @keyframes avatar-glow{
+    0%,100%{ opacity:0.15; }
+    50%{ opacity:0.7; }
+  }
+  /* Запасной вид, если WebGL/CDN/модель недоступны — вёрстка не ломается. */
+  .avatar-fallback{
+    position:absolute;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:'Spectral', serif;
+    font-size:64px;
+    color:var(--gold-soft);
+    background:var(--ink);
+  }
+  .avatar-fallback.hidden{ display:none; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <div class="eyebrow">
+    <span>прототип · демо для презентации</span>
+    <span class="counter-pill" id="counterPill">3/3 бесплатно</span>
+  </div>
+
+  <div class="titles">
+    <p class="title-uz" id="titleUz">Tarix yordamchisi</p>
+    <p class="title-ru" id="titleRu">Голосовой помощник по истории</p>
+  </div>
+
+  <div class="tile-band"></div>
+
+  <div class="switch-row">
+    <div class="lang-switch" role="group" aria-label="Язык / Til">
+      <button id="langRu" type="button" class="active" aria-pressed="true">Русский</button>
+      <button id="langUz" type="button" aria-pressed="false">O'zbekcha</button>
+    </div>
+
+    <!-- Выбор голоса. Обе пары голосов бесплатные (Edge Read-Aloud:
+         uz-UZ-Madina/Sardor, ru-RU-Svetlana/Dmitry), поэтому переключатель
+         работает на оба языка и не требует платных ключей Azure. -->
+    <div class="switch-group">
+      <span class="switch-label" id="voiceLabel">Голос</span>
+      <div class="lang-switch" role="group" aria-labelledby="voiceLabel">
+        <button id="voiceFemale" type="button" class="active" aria-pressed="true">Женский</button>
+        <button id="voiceMale" type="button" aria-pressed="false">Мужской</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="kiosk-card">
+    <span class="corner corner-tl"></span>
+    <span class="corner corner-tr"></span>
+    <span class="corner corner-bl"></span>
+    <span class="corner corner-br"></span>
+
+    <!-- 3D-аватар: постоянный «живой» герой карточки. Он моргает и слегка
+         покачивается в покое, реагирует на состояния (слушает/думает/говорит)
+         и синхронизирует губы со звуком ответа. Логика — в модульном скрипте
+         перед </body>. Если 3D не загрузился, показывается .avatar-fallback. -->
+    <div class="avatar-stage" id="avatarStage">
+      <canvas id="avatarCanvas"></canvas>
+      <div class="avatar-fallback" id="avatarFallback">Т</div>
+    </div>
+
+    <button id="micBtn" class="medallion" aria-label="Задать вопрос голосом">
+      <span class="ring"></span>
+      <span class="ring"></span>
+      <span class="ring"></span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+        <rect x="9" y="2" width="6" height="12" rx="3"/>
+        <path d="M5 10v1a7 7 0 0 0 14 0v-1"/>
+        <path d="M12 18v3"/>
+      </svg>
+    </button>
+
+    <p class="hint" id="hintText">Нажмите и задайте вопрос по истории</p>
+
+    <div class="fallback-row">
+      <input type="text" id="textInput" placeholder="Или введите вопрос…">
+      <button id="askBtn">Спросить</button>
+    </div>
+    <p class="fallback-note" id="fallbackNote">Голос может не распознавать узбекский в некоторых браузерах — используйте текстовое поле как резерв.</p>
+
+    <p class="status-text" id="statusText"></p>
+
+    <div class="result-card hidden" id="resultCard">
+      <p class="question-echo" id="questionEcho"></p>
+      <div class="result-photo-frame">
+        <!-- referrerpolicy: Wikimedia отдаёт файлы и без реферера, а киоску
+             незачем сообщать сторонним хостам, какой вопрос задали.
+             alt заполняется из названия статьи в applyPhoto. -->
+        <img class="result-photo" id="resultPhoto" alt="" referrerpolicy="no-referrer" decoding="async">
+        <div class="result-photo-placeholder" id="resultPlaceholder">Т</div>
+      </div>
+      <p class="photo-credit hidden" id="photoCredit"></p>
+      <p class="result-topic" id="resultTopic"></p>
+      <p class="answer-text" id="answerText"></p>
+      <a class="source-link" id="sourceLink" target="_blank" rel="noopener">Источник: Wikipedia →</a>
+      <div class="stop-bar hidden" id="stopBar">
+        <span class="pulse-dot"></span>
+        <span class="stop-label" id="stopBarLabel">Скажите «стоп», чтобы прервать озвучивание</span>
+        <button id="stopBtn">Стоп</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="disclaimer">
+    Ответы формирует ИИ на основе статей Wikipedia — строго по найденному тексту,
+    без ответов на вопросы не по истории. Активация — по нажатию кнопки; в школьной
+    версии будет по датчику приближения и с проверенной базой фактов вместо Wikipedia.
+  </p>
+</div>
+
+<div class="paywall hidden" id="paywall">
+  <div class="paywall-card">
+    <h2>Бесплатный лимит исчерпан</h2>
+    <p>Вы задали 3 бесплатных вопроса. Для безлимитного доступа школе нужна подписка на образовательную версию.</p>
+    <button class="upgrade" id="upgradeBtn">Оформить доступ для школы</button>
+    <button class="demo-reset" id="resetDemoBtn">сбросить лимит (для демо)</button>
+  </div>
+</div>
+
+<script>
+// Все обращения к серверным функциям идут через префикс /api/* (правила в
+// netlify.toml). Это не косметика: на этих правилах висит лимит частоты запросов,
+// который Netlify считает НА СВОЕЙ ГРАНИЦЕ, до запуска функции — то есть перебор
+// не тратит ни вызовы функций, ни квоты Groq. Прямой путь /.netlify/functions/*
+// остаётся рабочим, но лимитом не прикрыт, поэтому фронтенд им не пользуется.
+let currentLang = 'ru';
+// Пол голоса озвучки. Уходит на сервер при КАЖДОМ запросе к /tts, поэтому
+// применяется к следующему ответу; уже начатую фразу не переозвучиваем — все её
+// куски синтезируются одной пачкой в момент старта (см. avatarSpeak).
+let currentVoice = 'female';
+let freeQuestionsLeft = 3;
+const FREE_LIMIT = 3;
+
+const els = {
+  micBtn: document.getElementById('micBtn'),
+  hintText: document.getElementById('hintText'),
+  textInput: document.getElementById('textInput'),
+  askBtn: document.getElementById('askBtn'),
+  statusText: document.getElementById('statusText'),
+  resultCard: document.getElementById('resultCard'),
+  questionEcho: document.getElementById('questionEcho'),
+  resultPhoto: document.getElementById('resultPhoto'),
+  resultPlaceholder: document.getElementById('resultPlaceholder'),
+  photoCredit: document.getElementById('photoCredit'),
+  resultTopic: document.getElementById('resultTopic'),
+  answerText: document.getElementById('answerText'),
+  sourceLink: document.getElementById('sourceLink'),
+  counterPill: document.getElementById('counterPill'),
+  paywall: document.getElementById('paywall'),
+  langRu: document.getElementById('langRu'),
+  langUz: document.getElementById('langUz'),
+  voiceLabel: document.getElementById('voiceLabel'),
+  voiceFemale: document.getElementById('voiceFemale'),
+  voiceMale: document.getElementById('voiceMale'),
+  stopBar: document.getElementById('stopBar'),
+  stopBarLabel: document.getElementById('stopBarLabel'),
+  stopBtn: document.getElementById('stopBtn'),
+};
+
+const LABELS = {
+  ru: {
+    hint: 'Нажмите и задайте вопрос по истории',
+    listening: 'Слушаю…',
+    thinking: 'Ищу ответ…',
+    notFound: 'У меня пока нет точного ответа на этот вопрос. Попробуй спросить у учителя или переформулировать вопрос.',
+    placeholder: 'Или введите вопрос…',
+    stopBar: 'Скажите «стоп» или «хватит», чтобы прервать озвучивание',
+    stopped: 'Озвучивание остановлено',
+    voiceLabel: 'Голос',
+    voiceFemale: 'Женский',
+    voiceMale: 'Мужской',
+    photoBy: 'Фото',
+    photoSource: 'файл',
+  },
+  uz: {
+    hint: "Tugmani bosing va tarix bo'yicha savol bering",
+    listening: 'Tinglayapman…',
+    thinking: 'Javob qidiryapman…',
+    notFound: "Bu savolga hozircha aniq javobim yo'q. O'qituvchidan so'rab ko'ring yoki savolni boshqacha ayting.",
+    placeholder: 'Yoki savolni yozing…',
+    stopBar: "«To'xta» yoki «Yetar» deng — ovozli javob to'xtaydi",
+    stopped: "To'xtatildi",
+    voiceLabel: 'Ovoz',
+    voiceFemale: 'Ayol',
+    voiceMale: 'Erkak',
+    photoBy: 'Foto',
+    photoSource: 'fayl',
+  }
+};
+
+function setLang(lang){
+  currentLang = lang;
+  els.langRu.classList.toggle('active', lang === 'ru');
+  els.langUz.classList.toggle('active', lang === 'uz');
+  els.langRu.setAttribute('aria-pressed', String(lang === 'ru'));
+  els.langUz.setAttribute('aria-pressed', String(lang === 'uz'));
+  els.hintText.textContent = LABELS[lang].hint;
+  els.textInput.placeholder = LABELS[lang].placeholder;
+  // Подписи выбора голоса тоже двуязычные — иначе на узбекской раскладке
+  // посреди интерфейса остаются два русских слова.
+  els.voiceLabel.textContent = LABELS[lang].voiceLabel;
+  els.voiceFemale.textContent = LABELS[lang].voiceFemale;
+  els.voiceMale.textContent = LABELS[lang].voiceMale;
+}
+els.langRu.addEventListener('click', () => setLang('ru'));
+els.langUz.addEventListener('click', () => setLang('uz'));
+
+// Пол голоса. Любое значение кроме 'male' считаем женским — так же, как на
+// сервере (pickVoice в netlify/functions/tts.js), чтобы фронт и бэк не могли
+// разойтись в трактовке одного и того же поля.
+function setVoice(voice){
+  currentVoice = voice === 'male' ? 'male' : 'female';
+  const male = currentVoice === 'male';
+  els.voiceFemale.classList.toggle('active', male === false);
+  els.voiceMale.classList.toggle('active', male);
+  els.voiceFemale.setAttribute('aria-pressed', String(male === false));
+  els.voiceMale.setAttribute('aria-pressed', String(male));
+}
+els.voiceFemale.addEventListener('click', () => setVoice('female'));
+els.voiceMale.addEventListener('click', () => setVoice('male'));
+
+function updateCounterPill(){
+  els.counterPill.textContent = `${freeQuestionsLeft}/${FREE_LIMIT} бесплатно`;
+}
+
+function showPaywall(show){
+  els.paywall.classList.toggle('hidden', !show);
+}
+
+document.getElementById('resetDemoBtn').addEventListener('click', () => {
+  freeQuestionsLeft = FREE_LIMIT;
+  updateCounterPill();
+  showPaywall(false);
+});
+document.getElementById('upgradeBtn').addEventListener('click', () => {
+  alert('Здесь будет переход к оформлению подписки для школы (мок для демо).');
+});
+
+// Speech recognition setup
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let micStartTimeout = null;
+if (SpeechRecognition) {
+  recognition = new SpeechRecognition();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.onstart = () => {
+    clearTimeout(micStartTimeout);
+    els.micBtn.classList.add('listening');
+    els.statusText.textContent = LABELS[currentLang].listening;
+    if (window.avatarSetState) window.avatarSetState('listening');
+  };
+  recognition.onerror = (event) => {
+    clearTimeout(micStartTimeout);
+    els.micBtn.classList.remove('listening');
+    if (window.avatarGetState && window.avatarGetState() === 'listening' && window.avatarSetState) {
+      window.avatarSetState('idle');
+    }
+    if (event.error === 'service-not-allowed' || event.error === 'language-not-supported') {
+      els.statusText.textContent = currentLang === 'uz'
+        ? "Этот браузер не поддерживает распознавание узбекской речи. Введите вопрос текстом ниже."
+        : 'Браузер отказал в распознавании речи. Введите вопрос текстом ниже, либо проверьте, что страница открыта через http/https.';
+      return;
+    }
+    const messages = {
+      'not-allowed': 'Доступ к микрофону не разрешён. Разрешите его в настройках сайта и попробуйте снова.',
+      'no-speech': 'Речь не распознана. Попробуйте ещё раз или используйте текстовое поле.',
+      'audio-capture': 'Микрофон не найден. Проверьте подключение микрофона.',
+      'network': 'Нет соединения с сервисом распознавания речи. Проверьте интернет.',
+    };
+    els.statusText.textContent = messages[event.error] || `Ошибка распознавания речи: ${event.error}`;
+  };
+  recognition.onend = () => {
+    clearTimeout(micStartTimeout);
+    els.micBtn.classList.remove('listening');
+    // Возврат в покой только если распознавание завершилось «пустым» (не было
+    // результата). Если результат пришёл — handleQuestion уже перевёл аватар в
+    // «думает», и перезатирать это состояние здесь нельзя.
+    if (window.avatarGetState && window.avatarGetState() === 'listening' && window.avatarSetState) {
+      window.avatarSetState('idle');
+    }
+  };
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+    els.textInput.value = transcript;
+    handleQuestion(transcript);
+  };
+} else {
+  els.hintText.textContent = 'Голосовой ввод не поддерживается этим браузером — используйте текстовое поле';
+}
+
+if (SpeechRecognition && location.protocol === 'file:') {
+  els.hintText.textContent = 'Файл открыт напрямую — микрофон может быть заблокирован. Запустите через локальный сервер (см. инструкцию).';
+}
+
+// Слова-команды остановки озвучивания (проверяются без учёта регистра, по вхождению).
+const STOP_WORDS = ['стоп', 'хватит', 'останов', 'прекрати', 'замолчи', "to'xta", 'toxta', 'yetar', 'bas', 'jim'];
+function containsStopWord(text){
+  const lower = text.toLowerCase();
+  return STOP_WORDS.some(w => lower.includes(w));
+}
+
+// Отдельный, независимый от основной кнопки распознаватель — работает только
+// пока идёт озвучивание ответа, и слушает исключительно стоп-слова.
+let stopRecognition = null;
+if (SpeechRecognition) {
+  stopRecognition = new SpeechRecognition();
+  stopRecognition.continuous = true;
+  stopRecognition.interimResults = true;
+  stopRecognition.onresult = (event) => {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (containsStopWord(event.results[i][0].transcript)) {
+        stopSpeaking();
+        break;
+      }
+    }
+  };
+  // Ошибки фонового прослушивания не показываем пользователю — кнопка "Стоп" всегда рядом как резерв.
+  stopRecognition.onerror = () => {};
+  stopRecognition.onend = () => {
+    if (isSpeaking()) {
+      try { stopRecognition.start(); } catch (e) { /* уже запущен */ }
+    }
+  };
+}
+
+function startStopListening(){
+  if (!stopRecognition) return;
+  stopRecognition.lang = currentLang === 'ru' ? 'ru-RU' : 'uz-UZ';
+  try { stopRecognition.start(); } catch (e) { /* уже запущен */ }
+}
+function stopStopListening(){
+  if (!stopRecognition) return;
+  try { stopRecognition.stop(); } catch (e) { /* уже остановлен */ }
+}
+// Идёт ли сейчас озвучивание — любым из двух путей (облачный голос аватара
+// или резервный speechSynthesis). Используется, чтобы не запускать новое
+// распознавание поверх речи и чтобы фоновый слушатель стоп-слов не отключался.
+function isSpeaking(){
+  const synth = window.speechSynthesis && window.speechSynthesis.speaking;
+  const avatar = window.avatarIsPlaying && window.avatarIsPlaying();
+  return !!(synth || avatar);
+}
+
+function stopSpeaking(){
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  if (window.avatarStop) window.avatarStop();          // остановить облачный голос + липсинк
+  if (window.avatarSetState) window.avatarSetState('idle');
+  stopStopListening();
+  els.stopBar.classList.add('hidden');
+  els.statusText.textContent = LABELS[currentLang].stopped;
+}
+els.stopBtn.addEventListener('click', stopSpeaking);
+
+function describeMicError(err){
+  const map = {
+    NotAllowedError: 'Доступ к микрофону запрещён. Проверьте настройки сайта в браузере и разрешения микрофона в системе.',
+    PermissionDeniedError: 'Доступ к микрофону запрещён. Проверьте настройки сайта в браузере и разрешения микрофона в системе.',
+    NotFoundError: 'Микрофон не найден. Проверьте, что он подключён.',
+    NotReadableError: 'Микрофон занят другим приложением. Закройте другие программы, использующие микрофон.',
+    SecurityError: 'Страница открыта не через localhost/https — доступ к микрофону заблокирован браузером.',
+  };
+  return map[err.name] || `Не удалось получить доступ к микрофону (${err.name}).`;
+}
+
+// iOS Safari требует, чтобы speechSynthesis.speak() хотя бы раз был вызван
+// синхронно внутри обработчика пользовательского жеста — иначе последующие
+// вызовы speak() из асинхронного кода (после сетевого запроса) будут немыми.
+// Ограничиваем это именно iOS: на Chrome тот же приём вызывает известный
+// баг speechSynthesis (speak+cancel подряд "залипает" и глушит весь звук).
+const isIOS = /iP(hone|od|ad)/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let speechUnlocked = false;
+function unlockSpeechSynthesis(){
+  if (!isIOS || speechUnlocked || !window.speechSynthesis) return;
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(' '));
+  speechUnlocked = true;
+}
+
+// ── Голосовой ввод для УЗБЕКСКОГО через запись + сервер Whisper ──────────────
+// Браузерный webkitSpeechRecognition узбекский не распознаёт (движок Google его
+// не поддерживает — молчит или выдаёт мусор). Поэтому для uz мы записываем звук
+// через MediaRecorder и отправляем его на нашу функцию /api/stt,
+// которая распознаёт его моделью Whisper на Groq. Русский язык при этом
+// продолжает работать штатно через встроенное распознавание браузера.
+let mediaRecorder = null;
+let uzChunks = [];
+let uzStream = null;
+let uzMime = 'audio/webm';
+let isUzbekRecording = false;
+let uzAudioCtx = null;
+let uzAnalyser = null;
+let uzRafId = null;
+let uzHardCap = null;
+
+// Выбирает контейнер записи, который поддерживает и браузер, и Whisper.
+function pickAudioMime(){
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/mp4', // Safari/iOS
+  ];
+  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+  for (const c of candidates) {
+    if (MediaRecorder.isTypeSupported(c)) return c;
+  }
+  return '';
+}
+
+// Blob → чистый base64 (без префикса data:...;base64,) для отправки в JSON.
+function blobToBase64(blob){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result || '';
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('FileReader error'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Автоопределение тишины: как только человек начал говорить и затем ~1.5 c
+// молчит — останавливаем запись сами, чтобы не ждать ручного нажатия. Считаем
+// громкость (RMS) по временной форме сигнала из AnalyserNode.
+function setupSilenceDetection(stream){
+  try {
+    uzAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = uzAudioCtx.createMediaStreamSource(stream);
+    uzAnalyser = uzAudioCtx.createAnalyser();
+    uzAnalyser.fftSize = 2048;
+    source.connect(uzAnalyser);
+    const data = new Uint8Array(uzAnalyser.fftSize);
+    const SPEECH_RMS = 0.02;   // выше этого порога считаем, что идёт речь
+    const SILENCE_MS = 1500;   // столько тишины ПОСЛЕ речи → автостоп
+    let speechStarted = false;
+    let silenceStart = null;
+    const tick = () => {
+      if (!isUzbekRecording) return;
+      uzAnalyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      if (rms > SPEECH_RMS) {
+        speechStarted = true;
+        silenceStart = null;
+      } else if (speechStarted) {
+        if (silenceStart === null) silenceStart = performance.now();
+        else if (performance.now() - silenceStart > SILENCE_MS) {
+          stopUzbekVoiceInput();
+          return;
+        }
+      }
+      uzRafId = requestAnimationFrame(tick);
+    };
+    uzRafId = requestAnimationFrame(tick);
+  } catch (e) {
+    // Web Audio недоступен — не критично: остаются ручная остановка и жёсткий лимит.
+    console.warn('Автоопределение тишины недоступно:', e.message);
+  }
+}
+
+async function startUzbekVoiceInput(){
+  if (isUzbekRecording) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+    els.statusText.textContent = 'Этот браузер не поддерживает запись с микрофона. Введите вопрос текстом ниже.';
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    els.statusText.textContent = describeMicError(err);
+    return;
+  }
+  uzStream = stream;
+  uzChunks = [];
+  const mime = pickAudioMime();
+  try {
+    mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  } catch (e) {
+    mediaRecorder = new MediaRecorder(stream);
+  }
+  uzMime = mediaRecorder.mimeType || mime || 'audio/webm';
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) uzChunks.push(e.data); };
+  mediaRecorder.onstop = onUzbekRecordingStop;
+  mediaRecorder.start();
+  isUzbekRecording = true;
+  els.micBtn.classList.add('listening');
+  els.statusText.textContent = LABELS[currentLang].listening;
+  if (window.avatarSetState) window.avatarSetState('listening');
+  setupSilenceDetection(stream);
+  // Жёсткий предел длительности — если тишина так и не наступила.
+  clearTimeout(uzHardCap);
+  uzHardCap = setTimeout(() => { stopUzbekVoiceInput(); }, 12000);
+}
+
+function stopUzbekVoiceInput(){
+  if (!isUzbekRecording) return;
+  isUzbekRecording = false; // остановит цикл tick() автоопределения тишины
+  clearTimeout(uzHardCap);
+  if (uzRafId) { cancelAnimationFrame(uzRafId); uzRafId = null; }
+  try { if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop(); } catch (e) { /* уже остановлен */ }
+  // Гасим дорожки микрофона (убираем индикатор записи в браузере).
+  if (uzStream) { uzStream.getTracks().forEach((t) => t.stop()); uzStream = null; }
+  if (uzAudioCtx) { try { uzAudioCtx.close(); } catch (e) { /* уже закрыт */ } uzAudioCtx = null; }
+  els.micBtn.classList.remove('listening');
+}
+
+// Запись остановлена — собираем клип, шлём на сервер, распознаём и задаём вопрос.
+async function onUzbekRecordingStop(){
+  const blob = new Blob(uzChunks, { type: uzMime });
+  uzChunks = [];
+  if (!blob.size) {
+    els.statusText.textContent = 'Речь не распознана. Попробуйте ещё раз или введите текст ниже.';
+    if (window.avatarSetState) window.avatarSetState('idle');
+    return;
+  }
+  // Идёт распознавание — показываем «думаю» (сразу после придёт и ответ).
+  els.statusText.textContent = LABELS[currentLang].thinking;
+  if (window.avatarSetState) window.avatarSetState('thinking');
+
+  let base64;
+  try {
+    base64 = await blobToBase64(blob);
+  } catch (e) {
+    els.statusText.textContent = 'Не удалось обработать запись. Попробуйте ещё раз.';
+    if (window.avatarSetState) window.avatarSetState('idle');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/stt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-app-token': 'tarix-2026-demo' },
+      body: JSON.stringify({ audio: base64, mime: uzMime, lang: 'uz' }),
+    });
+    if (!res.ok) throw new Error('STT ' + res.status);
+    const data = await res.json();
+    const text = (data.text || '').trim();
+    if (!text) {
+      els.statusText.textContent = 'Речь не распознана. Попробуйте ещё раз или введите текст ниже.';
+      if (window.avatarSetState) window.avatarSetState('idle');
+      return;
+    }
+    els.textInput.value = text;
+    handleQuestion(text);
+  } catch (err) {
+    console.error('Ошибка распознавания речи:', err);
+    els.statusText.textContent = 'Сервис распознавания недоступен. Введите вопрос текстом ниже.';
+    if (window.avatarSetState) window.avatarSetState('idle');
+  }
+}
+
+els.micBtn.addEventListener('click', () => {
+  // Узбекский: браузер не умеет — пишем звук и распознаём на сервере (Whisper).
+  if (currentLang === 'uz') {
+    if (isUzbekRecording) {
+      stopUzbekVoiceInput(); // повторный клик = остановить запись вручную
+    } else {
+      unlockSpeechSynthesis();
+      if (window.__avatarUnlockAudio) window.__avatarUnlockAudio();
+      if (isSpeaking()) stopSpeaking();
+      startUzbekVoiceInput();
+    }
+    return;
+  }
+
+  // Русский: штатное распознавание средствами браузера.
+  if (!recognition) return;
+  if (isSpeaking()) {
+    stopSpeaking();
+  }
+  unlockSpeechSynthesis();
+  if (window.__avatarUnlockAudio) window.__avatarUnlockAudio();  // разблокировать AudioContext по жесту
+  recognition.lang = 'ru-RU';
+  els.statusText.textContent = '';
+  clearTimeout(micStartTimeout);
+  micStartTimeout = setTimeout(() => {
+    // onstart так и не сработал — распознавание молча не запустилось.
+    try { recognition.abort(); } catch (e) { /* ничего не поделать */ }
+    els.micBtn.classList.remove('listening');
+    els.statusText.textContent = 'Распознавание речи не запустилось. Введите вопрос текстом ниже.';
+  }, 8000);
+  try {
+    recognition.start();
+  } catch (e) {
+    clearTimeout(micStartTimeout);
+    els.statusText.textContent = 'Распознавание речи не запустилось. Введите вопрос текстом ниже.';
+  }
+});
+
+els.askBtn.addEventListener('click', () => {
+  unlockSpeechSynthesis();
+  if (window.__avatarUnlockAudio) window.__avatarUnlockAudio();
+  const q = els.textInput.value.trim();
+  if (q) handleQuestion(q);
+});
+els.textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') els.askBtn.click();
+});
+
+async function handleQuestion(question){
+  if (freeQuestionsLeft <= 0) {
+    showPaywall(true);
+    return;
+  }
+  els.resultCard.classList.add('hidden');
+  els.stopBar.classList.add('hidden');
+  stopStopListening();
+  resetPhoto();
+  els.statusText.textContent = LABELS[currentLang].thinking;
+  if (window.avatarSetState) window.avatarSetState('thinking');
+
+  // Фото ищем ПАРАЛЛЕЛЬНО с ответом. Поиск картинки и её лицензии — это два
+  // запроса к Wikimedia (~0.6-1.2 с); внутри /answer они задержали бы и текст,
+  // и старт озвучки. Текст показываем сразу, фото догоняет говорящего аватара
+  // и встраивается в заранее зарезервированную рамку.
+  const photoPromise = requestPhoto(question);
+
+  try {
+    const res = await fetch('/api/answer', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Необязательный слой защиты: если на сервере задана переменная
+        // APP_SHARED_TOKEN, значения должны совпадать. Смените обе строки
+        // на свою (это не секрет — просто фильтр от случайных ботов).
+        'x-app-token': 'tarix-2026-demo',
+      },
+      body: JSON.stringify({ question, lang: currentLang }),
+    });
+
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* тело не JSON */ }
+
+    if (!res.ok) {
+      const serverMsg = data && data.error ? data.error : `HTTP ${res.status}`;
+      throw new Error(serverMsg);
+    }
+    if (!data) throw new Error('Пустой ответ сервера');
+
+    if (!data.has_answer) {
+      renderNoAnswer(question);
+      return;
+    }
+    // photo_url из /answer сознательно НЕ используем: у него нет ни автора, ни
+    // лицензии, а киоск в госучреждении не должен показывать картинку без
+    // атрибуции. Показываем только то, что вернул /photo с проверенной
+    // свободной лицензией.
+    renderAnswer(question, data.topic, data.answer_text, data.source_url, data.source_label);
+    attachPhoto(photoPromise, data.topic);
+
+    freeQuestionsLeft -= 1;
+    updateCounterPill();
+    if (freeQuestionsLeft <= 0) {
+      setTimeout(() => showPaywall(true), 1200);
+    }
+  } catch (err) {
+    els.statusText.textContent = 'Ошибка: ' + err.message;
+    if (window.avatarSetState) window.avatarSetState('idle');
+  }
+}
+
+function renderAnswer(question, topic, text, sourceUrl, sourceLabel){
+  els.statusText.textContent = '';
+  els.questionEcho.textContent = `Вы спросили: «${question}»`;
+  els.resultTopic.textContent = topic;
+  els.answerText.textContent = text;
+
+  if (sourceUrl) {
+    els.sourceLink.href = sourceUrl;
+    els.sourceLink.textContent = `Источник: ${sourceLabel || 'Wikipedia'} →`;
+    els.sourceLink.style.display = '';
+  } else {
+    els.sourceLink.textContent = sourceLabel ? `✓ ${sourceLabel}` : '';
+    els.sourceLink.removeAttribute('href');
+    els.sourceLink.style.display = sourceLabel ? '' : 'none';
+  }
+
+  // Фото сюда не приходит: его ставит applyPhoto, когда /photo ответит.
+  // Пока фото нет, в рамке видна заглушка с буквой — карточка не пустая.
+  els.resultCard.classList.remove('hidden');
+  speak(text);
+}
+
+function renderNoAnswer(question){
+  els.statusText.textContent = '';
+  els.questionEcho.textContent = `Вы спросили: «${question}»`;
+  els.resultTopic.textContent = '';
+  els.answerText.textContent = LABELS[currentLang].notFound;
+  els.sourceLink.style.display = 'none';
+  resetPhoto();
+  els.resultCard.classList.remove('hidden');
+  speak(LABELS[currentLang].notFound);
+}
+
+/* ---------------------------------------------------------------------------
+   ФОТО К ОТВЕТУ.
+   Функция /photo ищет картинку в Wikimedia и отдаёт её вместе с автором и
+   лицензией, а несвободные (fair use) файлы не отдаёт вообще. Здесь только
+   показ. Рамка уже занимает своё место, поэтому приход фото не сдвигает текст.
+   photoRequestId обесценивает результаты предыдущего вопроса: пользователь
+   киоска нередко спрашивает следующее, не дослушав, и фото от старого вопроса
+   не должно всплыть поверх нового ответа.
+   --------------------------------------------------------------------------- */
+let photoRequestId = 0;
+
+function resetPhoto(){
+  photoRequestId += 1;
+  const img = els.resultPhoto;
+  img.onload = null;
+  img.onerror = null;
+  img.classList.remove('ready');
+  img.removeAttribute('src');   // обрываем незакончившуюся загрузку
+  img.alt = '';
+  els.resultPlaceholder.classList.remove('hidden');
+  els.photoCredit.textContent = '';
+  els.photoCredit.classList.add('hidden');
+}
+
+async function requestPhoto(topic){
+  try {
+    const res = await fetch('/api/photo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-app-token': 'tarix-2026-demo' },
+      body: JSON.stringify({ topic, lang: currentLang }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && data.has_photo ? data : null;
+  } catch (e) {
+    return null;   // фото необязательно: ответ и озвучка работают без него
+  }
+}
+
+async function attachPhoto(promise, topic){
+  const myId = photoRequestId;
+  let result = await promise;
+  // Первый поиск шёл по сырому вопросу («кто такой Амир Темур?»). Если не
+  // нашлось — пробуем по теме из ответа: она короче и точнее. Это уже вне
+  // критического пути, текст и озвучка идут своим ходом.
+  if (!result && topic) result = await requestPhoto(topic);
+  if (myId !== photoRequestId) return;
+  if (result) applyPhoto(result, myId);
+}
+
+function applyPhoto(photo, myId){
+  const img = els.resultPhoto;
+  img.onload = () => {
+    if (myId !== photoRequestId) return;
+    img.classList.add('ready');
+    els.resultPlaceholder.classList.add('hidden');
+  };
+  // Если картинка не открылась (Wikimedia недоступна, файл переименован) —
+  // остаёмся на заглушке. Раньше в этом случае была пустая рамка.
+  img.onerror = () => {
+    if (myId !== photoRequestId) return;
+    img.removeAttribute('src');
+    img.classList.remove('ready');
+    els.resultPlaceholder.classList.remove('hidden');
+    els.photoCredit.classList.add('hidden');
+  };
+  img.alt = photo.alt || photo.title || '';
+  img.src = photo.photo_url;
+  renderPhotoCredit(photo);
+}
+
+// Подпись собираем узлами DOM, а не innerHTML: автор и лицензия — внешние
+// данные из Wikimedia. Сервер их уже чистит от разметки, но вставлять внешнюю
+// строку как HTML нельзя ни при каких условиях.
+function renderPhotoCredit(photo){
+  const credit = els.photoCredit;
+  credit.textContent = '';
+  const parts = [];
+  if (photo.author) parts.push(photo.author);
+  if (photo.license) parts.push(photo.license);
+  if (!parts.length) {
+    credit.classList.add('hidden');   // подписывать нечем — строку не показываем
+    return;
+  }
+  const L = LABELS[currentLang];
+  credit.appendChild(document.createTextNode(L.photoBy + ': ' + parts.join(' · ')));
+  // href только https и только по факту — иначе ссылку не рисуем вообще.
+  if (photo.file_page && photo.file_page.indexOf('https://') === 0) {
+    credit.appendChild(document.createTextNode(' — '));
+    const link = document.createElement('a');
+    link.href = photo.file_page;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = L.photoSource;
+    credit.appendChild(link);
+  }
+  credit.classList.remove('hidden');
+}
+
+// Голоса браузер отдаёт асинхронно — кэшируем список и обновляем по событию.
+let cachedVoices = [];
+function loadVoices(){
+  cachedVoices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+}
+if (window.speechSynthesis) {
+  loadVoices();
+  window.speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+// Пол голоса Web Speech API не сообщает вообще: у SpeechSynthesisVoice есть
+// только name, lang, localService и default. Поэтому на резервном пути пол
+// угадываем по имени — имена системных голосов устойчивы и повторяются от
+// устройства к устройству. Не угадали — берём любой голос этого языка: на
+// аварийном пути важнее заговорить, чем попасть в пол.
+const VOICE_NAME_HINTS = {
+  male: /sardor|dmitr|yuri|pavel|artem|maxim|male|дмитр|павел|юрий|мужск/i,
+  female: /madina|svetlana|milena|irina|alena|aleksandra|female|светлан|милен|ирин|женск/i,
+};
+
+function pickVoice(lang, voicePref){
+  const prefix = lang === 'ru' ? 'ru' : 'uz';
+  const matches = cachedVoices.filter(v => v.lang.toLowerCase().startsWith(prefix));
+  if (matches.length === 0) return null;
+  const hint = VOICE_NAME_HINTS[voicePref === 'male' ? 'male' : 'female'];
+  const byGender = matches.filter(v => hint.test(v.name || ''));
+  const pool = byGender.length ? byGender : matches;
+  // Голоса с localService:false — это обычно облачные голоса (например Google),
+  // они звучат заметно естественнее встроенных системных голосов.
+  return pool.find(v => v.localService === false) || pool[0];
+}
+
+function hasVoiceFor(lang){
+  const prefix = lang === 'ru' ? 'ru' : 'uz';
+  return cachedVoices.some(v => v.lang.toLowerCase().startsWith(prefix));
+}
+
+// Озвучивание ответа. Приоритет:
+//   1) Облачный нейро-голос (Microsoft Edge Read-Aloud через наш прокси
+//      /api/tts) с НАСТОЯЩИМ липсинком по амплитуде звука —
+//      работает и для русского, и для узбекского (браузерный голос узбекский
+//      почти нигде не умеет). Для русского у прокси есть свой резерв — Google.
+//   2) Если прокси недоступен вовсе (нет сети/локальный запуск/оба источника
+//      закрыты) — резерв через встроенный speechSynthesis (см. fallbackSpeak).
+function speak(text){
+  // Общие колбэки интерфейса — одинаковы для обоих путей: показать панель
+  // «стоп» и включить фоновый распознаватель стоп-слов, а по окончании убрать.
+  const onStart = () => {
+    els.stopBarLabel.textContent = LABELS[currentLang].stopBar;
+    els.stopBar.classList.remove('hidden');
+    startStopListening();
+  };
+  const onEnd = () => {
+    els.stopBar.classList.add('hidden');
+    stopStopListening();
+    if (window.avatarSetState) window.avatarSetState('idle');
+  };
+
+  if (window.avatarSpeak) {
+    // Модуль аватара сам переведёт лицо в «говорит» в момент старта звука и
+    // вернёт в «покой» по окончании; нам он вернёт true (заиграло) / false.
+    window.avatarSpeak(text, currentLang, { onStart, onEnd, voice: currentVoice }).then((ok) => {
+      if (!ok) fallbackSpeak(text, onStart, onEnd);
+    });
+    return;
+  }
+  fallbackSpeak(text, onStart, onEnd);
+}
+
+// Резерв: встроенный speechSynthesis. Амплитуды у него нет, поэтому губы
+// аватара двигаются по приблизительным виземам (их включает сам модуль по
+// флагу «говорит»). Если для узбекского нет настоящего голоса — честно
+// оставляем только текст на экране, без звука и без «говорящего» аватара.
+function fallbackSpeak(text, onStart, onEnd){
+  if (!window.speechSynthesis) { onEnd(); return; }
+  window.speechSynthesis.cancel();
+  if (currentLang === 'uz' && !hasVoiceFor('uz')) {
+    els.statusText.textContent = "Озвучивание на узбекском недоступно на этом устройстве — доступен только текст.";
+    if (window.avatarSetState) window.avatarSetState('idle');
+    return;
+  }
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = currentLang === 'ru' ? 'ru-RU' : 'uz-UZ';
+  const voice = pickVoice(currentLang, currentVoice);
+  if (voice) utter.voice = voice;
+  utter.rate = 0.95;
+  utter.pitch = 1.0;
+  utter.onstart = () => { if (window.avatarSetState) window.avatarSetState('talking'); onStart(); };
+  utter.onend = onEnd;
+  utter.onerror = onEnd;
+  window.speechSynthesis.speak(utter);
+}
+
+updateCounterPill();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     3D-АВАТАР + НАСТОЯЩИЙ ЛИПСИНК
+     Этот модуль грузится отдельно от классического скрипта выше и общается с ним
+     только через несколько window.*-функций (avatarSetState / avatarGetState /
+     avatarSpeak / avatarStop / avatarIsPlaying / __avatarUnlockAudio).
+     Если Three.js не подхватился с CDN, WebGL недоступен или модель не
+     раскодировалась — модуль молча сдаётся: на экране остаётся запасная буква
+     «Т» (.avatar-fallback), а классический код сам озвучивает через
+     speechSynthesis. Поэтому вся инициализация обёрнута в try/catch и ничего
+     не ломает на старой или слабой технике.
+     ══════════════════════════════════════════════════════════════════════════ -->
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+// Модель аватара. Сейчас — локальный женский аватар Ready Player Me
+// (models/avatar.glb): совпадает по полу с женским голосом озвучки, полностью
+// проработан (волосы, плечи, одежда) в отличие от прежней «голой» головы facecap.
+// ВАЖНО: любой аватар Ready Player Me имеет ОДИНАКОВЫЙ набор морфов (ARKit +
+// визема) и те же имена мешей (Wolf3D_Head/_Teeth, EyeLeft/EyeRight), поэтому
+// его можно заменить «в лоб» — положите свой .glb рядом и поменяйте имя файла,
+// либо вставьте прямую ссылку readyplayer.me (см. заметку о лицензии в чате).
+const MODEL_URL = 'models/avatar.glb';    // женский RPM-аватар, ARKit-блендшейпы
+const TRANSCODER_PATH = 'three/basis/';   // локальный basis-транскодер для KTX2-текстур
+const APP_TOKEN = 'tarix-2026-demo';      // тот же общий токен, что у answer.js/tts.js
+// Напоминание: к функциям обращаемся только через /api/* — там лимит частоты
+// запросов (netlify.toml). Блок отдельный от classic-скрипта, константы не общие.
+
+const canvas   = document.getElementById('avatarCanvas');
+const stage    = document.getElementById('avatarStage');
+const fallback = document.getElementById('avatarFallback');
+
+function showFallback(){ if (fallback) fallback.classList.remove('hidden'); }
+function hideFallback(){ if (fallback) fallback.classList.add('hidden'); }
+
+// ── Состояние аватара ────────────────────────────────────────────────────────
+// Один объект флагов + текущее строковое имя. Классический код выставляет его
+// через avatarSetState('listening' | 'thinking' | 'talking' | 'idle').
+const state = { talking: false, listening: false, thinking: false };
+let stateName = 'idle';
+function setState(name){
+  stateName = name;
+  state.talking   = name === 'talking';
+  state.listening = name === 'listening';
+  state.thinking  = name === 'thinking';
+  if (stage) stage.classList.toggle('is-listening', name === 'listening'); // бирюзовое свечение
+}
+window.avatarSetState = setState;
+window.avatarGetState = () => stateName;
+
+// ── Web Audio: облачная озвучка + липсинк по амплитуде ────────────────────────
+let audioCtx = null, analyser = null, timeData = null;
+let audioEl = null, mediaSrc = null;
+let audioPlaying = false;   // играет ли сейчас наш облачный голос → липсинк по реальной амплитуде
+
+function ensureAudio(){
+  if (audioCtx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  audioCtx = new AC();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 256;                  // 256 сэмплов на кадр — достаточно для громкости
+  analyser.smoothingTimeConstant = 0.6;
+  timeData = new Uint8Array(analyser.fftSize);
+  analyser.connect(audioCtx.destination);  // граф: <audio> → analyser → колонки
+}
+
+// Разблокировка звука по жесту пользователя (iOS/Chrome не дают играть без него).
+// Классический код зовёт это в обработчиках клика по микрофону и кнопке «спросить».
+window.__avatarUnlockAudio = () => {
+  try {
+    ensureAudio();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch(e){ /* не критично: просто не будет облачного голоса, откатимся на speechSynthesis */ }
+};
+
+// Глушим и отсоединяем текущий <audio> перед запуском нового ответа.
+function teardownAudio(){
+  if (audioEl){ try { audioEl.pause(); } catch(e){} audioEl.onended = null; audioEl.onerror = null; }
+  if (mediaSrc){ try { mediaSrc.disconnect(); } catch(e){} mediaSrc = null; }
+  audioEl = null;
+}
+
+// ── Озвучка с ранним стартом (фикс «голос отвечает поздно») ───────────────────
+// Раньше синтезировали ВЕСЬ ответ и ждали полный mp3 до первого звука — отсюда
+// пауза в 1–2 с после появления текста. Теперь режем ответ на фразы, синтезируем
+// их ПАРАЛЛЕЛЬНО, а проигрываем по очереди через ОДИН и тот же AnalyserNode
+// (липсинк не рвётся). Голос стартует, как только готова ПЕРВАЯ фраза.
+
+// Токен «поколения речи»: новый avatarSpeak/avatarStop обесценивает прежнюю
+// очередь, чтобы опоздавшие фразы не заиграли поверх нового ответа.
+let speechToken = 0;
+
+// Режем текст на фразы: первую отдаём отдельно (быстрый старт), остальные
+// склеиваем до ~180 символов (баланс между задержкой и числом запросов).
+function splitForTts(text){
+  const clean = (text || '').trim();
+  if (!clean) return [];
+  const sentences = clean.match(/[^.!?…]+[.!?…]*/g) || [clean];
+  const parts = sentences.map((s) => s.trim()).filter(Boolean);
+  if (parts.length <= 1) return parts.length ? parts : [clean];
+  const chunks = [parts[0]];   // первая фраза — сразу в озвучку
+  let cur = '';
+  for (let i = 1; i < parts.length; i++){
+    const p = parts[i];
+    if (cur && (cur + ' ' + p).length > 180){ chunks.push(cur); cur = p; }
+    else cur = cur ? cur + ' ' + p : p;
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+// Один запрос к прокси → Blob mp3 (тот же origin, чтобы AnalyserNode видел
+// амплитуду). voice ('female' | 'male') выбирает пол голоса: на сервере обе
+// пары бесплатные (Edge), поэтому поле работает и для ru, и для uz.
+async function fetchTtsBlob(text, lang, voice){
+  const res = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-app-token': APP_TOKEN },
+    body: JSON.stringify({ text, lang, voice }),
+  });
+  if (!res.ok) throw new Error('tts ' + res.status);
+  const blob = await res.blob();
+  if (!blob || !blob.size) throw new Error('пустое аудио');
+  return blob;
+}
+
+// Главная функция озвучки. Возвращает Promise<boolean>:
+//   true  — звук пошёл (классический код больше ничего не делает),
+//   false — не удалось (код включит резервный speechSynthesis через fallbackSpeak).
+window.avatarSpeak = (text, lang, cb = {}) => new Promise((resolve) => {
+  (async () => {
+    const myToken = ++speechToken;   // «поколение» этой речи
+    // Пол голоса приходит из классического скрипта (переключатель «Голос»).
+    // По умолчанию женский — то же, что на сервере, чтобы озвучка не меняла пол
+    // сама по себе, если поле забыли передать.
+    const voice = cb.voice === 'male' ? 'male' : 'female';
+    try {
+      ensureAudio();
+      if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch(e){} }
+
+      const chunks = splitForTts(text);
+      if (!chunks.length){ resolve(false); return; }
+
+      // Синтез ВСЕХ фраз стартует сразу — они готовятся, пока играет текущая.
+      // Ошибку отдельной фразы гасим в null (такую фразу просто пропустим).
+      const jobs = chunks.map((t) => fetchTtsBlob(t, lang, voice).catch(() => null));
+
+      let started = false;   // заиграла ли хотя бы одна фраза
+      let idx = 0;
+
+      const cleanup = (fireEnd) => {
+        if (myToken === speechToken){   // не трогаем аудио, если нас уже сменил новый ответ
+          teardownAudio();
+          audioPlaying = false;
+          if (state.talking) setState('idle');
+        }
+        if (fireEnd && started && cb.onEnd) cb.onEnd();
+        if (!started) resolve(false);   // ни одна фраза не заиграла → откат на speechSynthesis
+      };
+
+      const playNext = async () => {
+        if (myToken !== speechToken) return;               // обесценены новым ответом/стопом
+        if (idx >= jobs.length){ cleanup(true); return; }  // все фразы отыграли
+        const blob = await jobs[idx++];
+        if (myToken !== speechToken) return;
+        if (!blob){ return playNext(); }                   // битую фразу пропускаем
+
+        const url = URL.createObjectURL(blob);   // blob: — тот же origin, поток не запятнан CORS
+        teardownAudio();                          // глушим предыдущую фразу и отсоединяем её от графа
+        const el = new Audio();
+        audioEl = el;
+        el.src = url;
+        try {
+          mediaSrc = audioCtx.createMediaElementSource(el);
+          mediaSrc.connect(analyser);             // граф: <audio> → analyser → колонки
+        } catch(e){ /* каждый раз новый элемент — сюда попасть не должны */ }
+        el.onended = () => { URL.revokeObjectURL(url); playNext(); };
+        el.onerror = () => { URL.revokeObjectURL(url); playNext(); };
+
+        try {
+          await el.play();   // при заблокированном автоплее промис упадёт
+        } catch(e){
+          URL.revokeObjectURL(url);
+          if (!started){ cleanup(false); return; }  // автоплей блокирован на 1-й фразе → откат
+          return playNext();                        // не первая — просто идём дальше
+        }
+        if (myToken !== speechToken){ try { el.pause(); } catch(_){} return; }
+
+        if (!started){   // момент реального старта звука — включаем «говорит» и разблокируем UI
+          started = true;
+          audioPlaying = true;
+          setState('talking');
+          if (cb.onStart) cb.onStart();
+          resolve(true);
+        }
+      };
+
+      playNext();
+    } catch (err) {
+      console.warn('Облачная озвучка недоступна, откат на speechSynthesis:', err && err.message);
+      if (myToken === speechToken){ audioPlaying = false; teardownAudio(); }
+      resolve(false);
+    }
+  })();
+});
+
+window.avatarStop = () => {
+  speechToken++;   // обесцениваем текущую очередь фраз — опоздавшие не заиграют
+  teardownAudio();
+  audioPlaying = false;
+  if (state.talking) setState('idle');
+};
+window.avatarIsPlaying = () => audioPlaying;
+
+// Прогрев озвучки. На Netlify (и вообще у Edge) ПЕРВЫЙ вызов /tts «холодный»:
+// DNS + TLS + WebSocket-рукопожатие с Edge ≈ 5 с; тёплые вызовы после него ≈ 0.8 с.
+// Именно этот холодный старт и ощущается как «голос отвечает поздно» на первом
+// вопросе. Поэтому сразу при загрузке шлём крошечный «пинг» — он разогревает и
+// контейнер функции, и соединение с Edge, так что к первому вопросу голос
+// стартует без холодной задержки. Fire-and-forget, без звука; ошибки не важны.
+let warmedUp = false;
+function warmUpTts(){
+  if (warmedUp) return;
+  warmedUp = true;
+  try {
+    fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-app-token': APP_TOKEN },
+      body: JSON.stringify({ text: 'Salom', lang: 'uz' }),
+    }).catch(() => { /* прогрев не удался — не критично, просто останемся «холодными» */ });
+  } catch(e){ /* даже синхронный сбой fetch не важен: это лишь прогрев */ }
+}
+
+// ── Three.js: сцена, свет, камера, рендер ─────────────────────────────────────
+// morph — флаг «морфы найдены»; morphs — все меши с морф-таргетами (у RPM их
+// несколько: голова, зубы, оба глаза), двигаем их синхронно.
+let renderer, scene, camera, group, morph = null, morphs = [];
+
+try {
+  // На мобильных (особенно iPhone) память WebGL ограничена: высокий
+  // devicePixelRatio (2–3) вместе со сглаживанием раздувают буфер кадра и могут
+  // «уронить» контекст на тяжёлой модели. Для маленького медальона разница
+  // незаметна, поэтому на телефоне режем pixelRatio до 1.5 и выключаем antialias —
+  // стабильность важнее едва заметного сглаживания краёв.
+  const isMobile = /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent)
+    || Math.min(window.innerWidth, window.innerHeight) < 520;
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: !isMobile, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2));
+  // Если GPU всё же потерял контекст (нехватка памяти на слабом телефоне) —
+  // гасим стандартную ошибку и показываем аккуратный запасной вид вместо чёрного.
+  canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); showFallback(); }, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.1;
+
+  scene = new THREE.Scene();
+  group = new THREE.Group();   // общий контейнер — им покачиваем «головой»
+  scene.add(group);
+
+  camera = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
+  camera.position.set(0, 0, 3.2);
+  camera.lookAt(0, 0, 0);
+
+  // Свет: мягкая заливка + ключевой + холодный контровой + тёплая подсветка снизу —
+  // лицо читается объёмно на тёмном фоне-нише.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const keyLight  = new THREE.DirectionalLight(0xffffff, 1.5);  keyLight.position.set(1, 1.2, 2);      scene.add(keyLight);
+  const rimLight  = new THREE.DirectionalLight(0xbfe3ff, 1.1);  rimLight.position.set(-1.5, 0.5, -1.8); scene.add(rimLight);
+  const fillLight = new THREE.DirectionalLight(0xffe6c2, 0.55); fillLight.position.set(0, -1.2, 1);     scene.add(fillLight);
+
+  sizeToStage();
+  loadModel();
+  requestAnimationFrame(loop);
+} catch (err) {
+  console.warn('3D-аватар недоступен (WebGL/Three.js), показываю запасную «Т»:', err && err.message);
+  showFallback();
+}
+
+// Разогреваем озвучку сразу при загрузке (не зависит от доступности 3D).
+warmUpTts();
+
+// Подгоняем размер рендера под фактический размер ниши (учёт dpr — через setPixelRatio).
+function sizeToStage(){
+  if (!renderer || !stage) return;
+  const w = stage.clientWidth  || 220;
+  const h = stage.clientHeight || 250;
+  renderer.setSize(w, h, false);   // false — не трогать CSS-размер canvas (им управляет вёрстка)
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+if (window.ResizeObserver && stage){
+  new ResizeObserver(() => sizeToStage()).observe(stage);
+} else {
+  window.addEventListener('resize', sizeToStage);
+}
+
+// ── Загрузка модели (KTX2-текстуры + meshopt-сжатие) ──────────────────────────
+function loadModel(){
+  const ktx2 = new KTX2Loader().setTranscoderPath(TRANSCODER_PATH).detectSupport(renderer);
+  const loader = new GLTFLoader().setKTX2Loader(ktx2).setMeshoptDecoder(MeshoptDecoder);
+  loader.load(
+    MODEL_URL,
+    (gltf) => {
+      const root = gltf.scene;
+      // У RPM-аватара морфы разложены по НЕСКОЛЬКИМ мешам (Wolf3D_Head,
+      // Wolf3D_Teeth, EyeLeft, EyeRight): у каждого свой массив influences, но
+      // одинаковые имена морфов. Собираем ВСЕ и двигаем синхронно, иначе губы,
+      // зубы и глаза разъедутся. (facecap раньше жил в одном меше — тоже ок.)
+      morphs = [];
+      let headObj = null;
+      root.traverse((o) => {
+        if (o.isMesh && o.morphTargetDictionary && o.morphTargetInfluences){
+          morphs.push({ dict: o.morphTargetDictionary, values: o.morphTargetInfluences });
+        }
+        if (!headObj && o.isMesh && /head/i.test(o.name || '')) headObj = o;
+      });
+      morph = morphs.length > 0;
+      if (!morph){ console.warn('В модели нет морф-таргетов — запасная «Т»'); showFallback(); return; }
+
+      group.add(root);
+
+      // Кадрируем «бюст»: голова + плечи. RPM-аватар полноростовой (начало
+      // координат в ступнях), поэтому наводимся именно на голову, а не на весь
+      // bounding box (иначе фигура вышла бы крошечной). Центр головы уводим в
+      // начало координат группы — вокруг него идёт покачивание «головой».
+      const headForFrame = headObj
+        || root.getObjectByName('Wolf3D_Head')
+        || root.getObjectByName('EyeLeft')
+        || root;
+      const focusBox = new THREE.Box3().setFromObject(headForFrame);
+      const focus = focusBox.getCenter(new THREE.Vector3());
+      const headSize = focusBox.getSize(new THREE.Vector3());
+      root.position.sub(focus);
+      // Высота кадра ≈ голова + плечи. Хотите крупнее/мельче — трогайте 2.4.
+      const frameH = (headSize.y || 0.25) * 2.4;
+      const fovRad = THREE.MathUtils.degToRad(camera.fov);
+      camera.position.set(0, 0, (frameH / 2) / Math.tan(fovRad / 2));
+      camera.lookAt(0, 0, 0);
+
+      hideFallback();   // модель готова — показываем 3D вместо «Т»
+    },
+    undefined,
+    (err) => { console.warn('Не удалось загрузить модель, запасная «Т»:', err && err.message); showFallback(); }
+  );
+}
+
+// ── Помощники по морфам ───────────────────────────────────────────────────────
+// Морфы лежат на нескольких мешах: читаем из первого нашедшего, пишем во ВСЕ.
+function getMorph(name){
+  for (const m of morphs){ const i = m.dict[name]; if (i !== undefined) return m.values[i]; }
+  return 0;
+}
+function setMorph(name, v){
+  for (const m of morphs){ const i = m.dict[name]; if (i !== undefined) m.values[i] = v; }
+}
+// У RPM симметричные морфы называются base+'Left' / base+'Right' (НЕ _L/_R).
+function setPair(base, v){ setMorph(base + 'Left', v); setMorph(base + 'Right', v); }
+function getPair(base){ return getMorph(base + 'Left'); }
+// Плавное приближение текущего значения морфа к цели (lerp с коэффициентом k).
+function ease(name, target, k){ setMorph(name, getMorph(name) + (target - getMorph(name)) * k); }
+function easePair(base, target, k){ setPair(base, getPair(base) + (target - getPair(base)) * k); }
+
+// Резервные виземы для случая БЕЗ амплитуды (когда говорит браузерный speechSynthesis).
+const VISEMES = [
+  { jawOpen: 0.85, mouthFunnel: 0.15, mouthPucker: 0.0, mouthStretch: 0.0,  mouthSmile: 0.05 },
+  { jawOpen: 0.45, mouthFunnel: 0.0,  mouthPucker: 0.0, mouthStretch: 0.35, mouthSmile: 0.30 },
+  { jawOpen: 0.55, mouthFunnel: 0.75, mouthPucker: 0.0, mouthStretch: 0.0,  mouthSmile: 0.05 },
+  { jawOpen: 0.25, mouthFunnel: 0.0,  mouthPucker: 0.7, mouthStretch: 0.0,  mouthSmile: 0.0  },
+  { jawOpen: 0.12, mouthFunnel: 0.0,  mouthPucker: 0.0, mouthStretch: 0.0,  mouthSmile: 0.0, mouthClose: 0.5 },
+];
+
+// ── Цикл анимации ─────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+let nextBlink = 2 + Math.random() * 3;
+let blinking = false, blinkT = 0;
+let viseme = VISEMES[0], visemeT = 0;
+
+function loop(){
+  requestAnimationFrame(loop);
+  if (!renderer) return;
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const k = 1 - Math.pow(0.001, dt);   // коэффициент плавного приближения (кадронезависимый)
+
+  if (morph){
+    // Цели морфов рта — источник зависит от режима.
+    let jaw = 0, funnel = 0, pucker = 0, stretch = 0, smile = 0.12, close = 0;
+
+    if (audioPlaying && analyser){
+      // НАСТОЯЩИЙ липсинк: среднеквадратичная громкость кадра → раскрытие челюсти.
+      analyser.getByteTimeDomainData(timeData);
+      let sum = 0;
+      for (let i = 0; i < timeData.length; i++){ const x = (timeData[i] - 128) / 128; sum += x * x; }
+      const amp = Math.min(1, Math.sqrt(sum / timeData.length) * 3.2);
+      jaw = Math.min(0.9, amp);
+      funnel = amp * 0.28;
+      stretch = amp * 0.14;
+      smile = 0.05;
+    } else if (state.talking){
+      // Резерв (speechSynthesis без потока): циклим виземы со случайной сменой.
+      visemeT -= dt;
+      if (visemeT <= 0){ viseme = VISEMES[(Math.random() * VISEMES.length) | 0]; visemeT = 0.09 + Math.random() * 0.08; }
+      jaw = viseme.jawOpen; funnel = viseme.mouthFunnel || 0; pucker = viseme.mouthPucker || 0;
+      stretch = viseme.mouthStretch || 0; smile = viseme.mouthSmile || 0.05; close = viseme.mouthClose || 0;
+    } else if (state.listening){
+      jaw = 0.16; smile = 0.14;   // «слушаю» — рот чуть приоткрыт, лёгкая улыбка
+    } else if (state.thinking){
+      jaw = 0.05; smile = 0.08;   // «думаю» — почти закрыт
+    } else {
+      jaw = 0.0; smile = 0.12;    // покой — лёгкая полуулыбка
+    }
+
+    ease('jawOpen', jaw, k);
+    ease('mouthFunnel', funnel, k);
+    ease('mouthPucker', pucker, k);
+    ease('mouthClose', close, k);
+    easePair('mouthStretch', stretch, k);
+    easePair('mouthSmile', smile, k);
+
+    // Моргание — короткий треугольный импульс по таймеру.
+    nextBlink -= dt;
+    if (!blinking && nextBlink <= 0){ blinking = true; blinkT = 0; }
+    let blink = 0;
+    if (blinking){
+      blinkT += dt;
+      const half = 0.065;
+      blink = blinkT < half ? blinkT / half : 1 - (blinkT - half) / half;
+      blink = Math.max(0, Math.min(1, blink));
+      if (blinkT >= half * 2){ blinking = false; nextBlink = 2.2 + Math.random() * 3.5; }
+    }
+    setPair('eyeBlink', blink);
+
+    // Брови: приподнимаем в «думает», чуть — в «говорит».
+    ease('browInnerUp', state.thinking ? 0.35 : (state.talking ? 0.12 : 0.0), k);
+  }
+
+  // Покачивание/кивки «головы» (весь group) — свои для каждого состояния.
+  const t = clock.elapsedTime;
+  let swayY = Math.sin(t * 0.6) * 0.05;
+  let swayX = Math.sin(t * 0.9) * 0.02;
+  if (state.listening){ swayY = Math.sin(t * 1.4) * 0.10; }
+  else if (state.talking){ swayY = Math.sin(t * 2.2) * 0.06; swayX = Math.sin(t * 3.1) * 0.03 - 0.02; }
+  else if (state.thinking){ swayX = -0.06 + Math.sin(t * 0.8) * 0.02; swayY = 0.10 + Math.sin(t * 0.5) * 0.03; }
+  group.rotation.y += (swayY - group.rotation.y) * k;
+  group.rotation.x += (swayX - group.rotation.x) * k;
+
+  renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
