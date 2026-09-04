@@ -914,6 +914,70 @@ function blobToBase64(blob){
   });
 }
 
+// Кодирует AudioBuffer в чистый 16kHz mono WAV (стандарт для Aisha и Whisper)
+function encodeWav(audioBuffer, targetSampleRate = 16000) {
+  const channelData = audioBuffer.getChannelData(0);
+  const origRate = audioBuffer.sampleRate;
+  let samples;
+  if (origRate === targetSampleRate) {
+    samples = channelData;
+  } else {
+    const ratio = origRate / targetSampleRate;
+    const newLength = Math.round(channelData.length / ratio);
+    samples = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+      const origIndex = i * ratio;
+      const index = Math.floor(origIndex);
+      const frac = origIndex - index;
+      const s0 = channelData[index] || 0;
+      const s1 = channelData[index + 1] || s0;
+      samples[i] = s0 + frac * (s1 - s0);
+    }
+  }
+
+  const pcm16 = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+
+  const buffer = new ArrayBuffer(44 + pcm16.length * 2);
+  const view = new DataView(buffer);
+
+  view.setUint32(0, 0x52494646, false); // "RIFF"
+  view.setUint32(4, 36 + pcm16.length * 2, true);
+  view.setUint32(8, 0x57415645, false); // "WAVE"
+  view.setUint32(12, 0x666d7420, false); // "fmt "
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, targetSampleRate, true);
+  view.setUint32(28, targetSampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  view.setUint32(36, 0x64617461, false); // "data"
+  view.setUint32(40, pcm16.length * 2, true);
+
+  const pcmBytes = new Int16Array(buffer, 44, pcm16.length);
+  pcmBytes.set(pcm16);
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function blobToWavBlob(blob){
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+    const wavBlob = encodeWav(audioBuffer, 16000);
+    try { ctx.close(); } catch(e){}
+    return wavBlob;
+  } catch(e) {
+    console.warn('Конвертация в WAV не удалась:', e);
+    return blob;
+  }
+}
+
 // Автоопределение тишины: как только человек начал говорить и затем ~1.5 c
 // молчит — останавливаем запись сами, чтобы не ждать ручного нажатия. Считаем
 // громкость (RMS) по временной форме сигнала из AnalyserNode.
@@ -1004,11 +1068,11 @@ function stopUzbekVoiceInput(){
   els.micBtn.classList.remove('listening');
 }
 
-// Запись остановлена — собираем клип, шлём на сервер, распознаём и задаём вопрос.
+// Запись остановлена — собираем клип, конвертируем в WAV для 100% совместимости, шлём на сервер.
 async function onUzbekRecordingStop(){
-  const blob = new Blob(uzChunks, { type: uzMime });
+  const rawBlob = new Blob(uzChunks, { type: uzMime });
   uzChunks = [];
-  if (!blob.size) {
+  if (!rawBlob.size) {
     els.statusText.textContent = 'Речь не распознана. Попробуйте ещё раз или введите текст ниже.';
     if (window.avatarSetState) window.avatarSetState('idle');
     return;
@@ -1017,9 +1081,21 @@ async function onUzbekRecordingStop(){
   els.statusText.textContent = LABELS[currentLang].thinking;
   if (window.avatarSetState) window.avatarSetState('thinking');
 
+  let uploadBlob = rawBlob;
+  let uploadMime = uzMime;
+  try {
+    const wav = await blobToWavBlob(rawBlob);
+    if (wav && wav.size > 1000) {
+      uploadBlob = wav;
+      uploadMime = 'audio/wav';
+    }
+  } catch (convErr) {
+    console.warn('WAV conversion fallback:', convErr);
+  }
+
   let base64;
   try {
-    base64 = await blobToBase64(blob);
+    base64 = await blobToBase64(uploadBlob);
   } catch (e) {
     els.statusText.textContent = 'Не удалось обработать запись. Попробуйте ещё раз.';
     if (window.avatarSetState) window.avatarSetState('idle');
@@ -1030,7 +1106,7 @@ async function onUzbekRecordingStop(){
     const res = await fetch('/api/stt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-app-token': 'tarix-2026-demo' },
-      body: JSON.stringify({ audio: base64, mime: uzMime, lang: 'uz' }),
+      body: JSON.stringify({ audio: base64, mime: uploadMime, lang: 'uz' }),
     });
     if (!res.ok) throw new Error('STT ' + res.status);
     const data = await res.json();

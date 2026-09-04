@@ -1,5 +1,12 @@
 # Local Netlify folder
 .netlify
 
+# Environment variables
+.env
+
 # Локальные снимки перед правками — история хранится в git
 .backup-*/
+# Dependencies & OS files
+node_modules/
+.DS_Store
+*.log

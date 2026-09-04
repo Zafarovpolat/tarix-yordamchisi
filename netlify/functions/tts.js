@@ -390,41 +390,96 @@ function normalizeUzForVoice(text) {
   return out.replace(APOSTROPHE_VARIANTS, "'");
 }
 
-// Единая точка синтеза: выбирает движок по языку с приоритетом Azure и
-// каскадным откатом. voicePref ('male' | 'female') доходит до КАЖДОГО движка —
-// и до платного Azure, и до бесплатного Edge.
+// ── Aisha TTS (aisha.group, модель Gulnoza) ───────────────────────────────
+async function aishaSynthesize(text) {
+  const apiKey = process.env.AISHA_API_KEY;
+  if (!apiKey) throw new Error('AISHA_API_KEY не задан');
+
+  const form = new FormData();
+  form.append('transcript', text);
+  form.append('language', 'uz');
+  form.append('model', 'Gulnoza');
+  form.append('mood', 'Neutral');
+  form.append('speed', '1.0');
+
+  const res = await fetch('https://back.aisha.group/api/v1/tts/post/', {
+    method: 'POST',
+    headers: { 'X-Api-Key': apiKey },
+    body: form,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Aisha TTS ${res.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const audioUrl = data.audio_path;
+  if (!audioUrl) throw new Error('Aisha TTS не вернул audio_path');
+
+  const fullUrl = audioUrl.startsWith('http') ? audioUrl : `https://back.aisha.group${audioUrl}`;
+  const audioRes = await fetch(fullUrl);
+  if (!audioRes.ok) throw new Error(`Не удалось скачать аудио Aisha: ${audioRes.status}`);
+
+  const arrayBuffer = await audioRes.arrayBuffer();
+  return {
+    buffer: Buffer.from(arrayBuffer),
+    contentType: 'audio/wav',
+  };
+}
+
+// Единая точка синтеза: выбирает движок по языку с приоритетом Aisha / Azure и
+// каскадным откатом. voicePref ('male' | 'female') доходит до КАЖДОГО движка.
 async function synthesize(text, lang, voicePref) {
   const azureOn = Boolean(AZURE_KEY && AZURE_REGION);
   const edgeVoice = pickVoice(lang, voicePref);
 
   if (lang === 'uz') {
     const speech = normalizeUzForVoice(text);
+
+    // 1. Aisha TTS (Gulnoza - узбекский нейро-голос от aisha.group)
+    if (process.env.AISHA_API_KEY && voicePref !== 'male') {
+      try {
+        const result = await aishaSynthesize(speech);
+        console.log('TTS: озвучено через Aisha (Gulnoza)');
+        return result;
+      } catch (err) {
+        console.warn('Aisha TTS не удался, откат на Azure/Edge:', err.message);
+      }
+    }
+
+    // 2. Azure (если заданы ключи)
     if (azureOn) {
       const uzVoice = voicePref === 'male' ? AZURE_UZ_VOICE_MALE : AZURE_UZ_VOICE;
       try {
-        return await azureSynthesize(speech, uzVoice, 'uz-UZ');
+        const buf = await azureSynthesize(speech, uzVoice, 'uz-UZ');
+        return { buffer: buf, contentType: 'audio/mpeg' };
       } catch (err) {
         console.warn('Azure (uz) не удался, откат на Edge:', err.message);
       }
     }
-    return await edgeSynthesize(speech, edgeVoice, 'uz-UZ');
+
+    // 3. Edge Read-Aloud
+    const buf = await edgeSynthesize(speech, edgeVoice, 'uz-UZ');
+    return { buffer: buf, contentType: 'audio/mpeg' };
   }
 
   if (azureOn) {
     const ruVoice = voicePref === 'male' ? AZURE_RU_VOICE_MALE : AZURE_RU_VOICE;
     try {
-      return await azureSynthesize(text, ruVoice, 'ru-RU');
+      const buf = await azureSynthesize(text, ruVoice, 'ru-RU');
+      return { buffer: buf, contentType: 'audio/mpeg' };
     } catch (err) {
       console.warn('Azure (ru) не удался, откат на Edge:', err.message);
     }
   }
   try {
-    return await edgeSynthesize(text, edgeVoice, 'ru-RU');
+    const buf = await edgeSynthesize(text, edgeVoice, 'ru-RU');
+    return { buffer: buf, contentType: 'audio/mpeg' };
   } catch (err) {
     console.warn('Edge (ru) не удался, откат на Google:', err.message);
-    // У Google TTS выбора пола нет — это аварийный путь, и лучше ответить не
-    // тем голосом, чем не ответить совсем.
-    return await googleSynthesize(text, 'ru');
+    const buf = await googleSynthesize(text, 'ru');
+    return { buffer: buf, contentType: 'audio/mpeg' };
   }
 }
 
@@ -479,17 +534,20 @@ exports.handler = async (event) => {
   console.log(`TTS: язык=${lang}, голос=${voice}, символов=${text.length}`);
 
   try {
-    const combined = await synthesize(text, lang, voice);
+    const resAudio = await synthesize(text, lang, voice);
+    const audioBuf = Buffer.isBuffer(resAudio) ? resAudio : (resAudio.buffer || resAudio);
+    const contentType = (resAudio && resAudio.contentType) || 'audio/mpeg';
+
     return {
       statusCode: 200,
       headers: {
-        'Content-Type': 'audio/mpeg',
+        'Content-Type': contentType,
         // Одинаковый вопрос из базы фактов → одинаковый ответ → одинаковое
         // аудио: кэшируем на сутки, чтобы не дёргать источник повторно.
         'Cache-Control': 'public, max-age=86400',
         ...corsHeaders(origin),
       },
-      body: combined.toString('base64'),
+      body: audioBuf.toString('base64'),
       isBase64Encoded: true,
     };
   } catch (err) {

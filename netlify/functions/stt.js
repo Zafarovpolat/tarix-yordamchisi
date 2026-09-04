@@ -154,20 +154,31 @@ exports.handler = async (event) => {
 
   try {
     let text;
+    const aishaKey = process.env.AISHA_API_KEY;
     const sa = loadServiceAccount();
 
-    // Узбекский: сначала Google Chirp 2 (если подключён), при любой осечке —
-    // Whisper. Русский и «Google не настроен» — сразу Whisper.
-    if (lang === 'uz' && sa) {
+    // 1. Aisha STT (специализированный узбекский движок aisha.group)
+    if (aishaKey) {
+      try {
+        text = await aishaTranscribe(buf, mime, lang);
+        console.log(`Aisha STT (${lang}): "${text}"`);
+      } catch (aErr) {
+        console.warn('Aisha STT не удался, откат на резерв:', aErr.message);
+      }
+    }
+
+    // 2. Google Chirp 2 (если Aisha не настроена или дала сбой, и язык узбекский)
+    if (!text && lang === 'uz' && sa) {
       try {
         text = await googleTranscribe(buf, mime, lang, sa);
         console.log(`Google STT (${lang}): "${text}"`);
       } catch (gErr) {
         console.warn('Google STT не удался, откат на Whisper:', gErr.message);
-        text = await whisperTranscribe(buf, mime, lang);
-        console.log(`Whisper STT (${lang}, fallback): "${text}"`);
       }
-    } else {
+    }
+
+    // 3. Groq Whisper (резервный путь для всех языков)
+    if (!text) {
       text = await whisperTranscribe(buf, mime, lang);
       console.log(`Whisper STT (${lang}): "${text}"`);
     }
@@ -178,6 +189,43 @@ exports.handler = async (event) => {
     return json({ error: 'Ошибка распознавания: ' + err.message }, 502, origin);
   }
 };
+
+// ── Aisha STT v1 (aisha.group) ──────────────────────────────────────────────
+async function aishaTranscribe(buf, mime, lang) {
+  const apiKey = process.env.AISHA_API_KEY;
+  if (!apiKey) throw new Error('AISHA_API_KEY не задан');
+
+  const ext = mime.includes('ogg') ? 'ogg'
+    : (mime.includes('mp4') || mime.includes('m4a')) ? 'm4a'
+    : mime.includes('wav') ? 'wav'
+    : (mime.includes('mpeg') || mime.includes('mp3')) ? 'mp3'
+    : mime.includes('webm') ? 'webm'
+    : 'wav';
+
+  const form = new FormData();
+  form.append('audio', new Blob([buf], { type: mime }), `audio.${ext}`);
+  form.append('language', lang === 'ru' ? 'ru' : 'uz');
+  form.append('has_diarization', 'false');
+
+  const res = await fetch('https://back.aisha.group/api/v1/stt/post/', {
+    method: 'POST',
+    headers: {
+      'X-Api-Key': apiKey,
+      'Accept-Language': lang === 'ru' ? 'ru' : 'uz',
+    },
+    body: form,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Aisha STT ${res.status}: ${errText.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const text = (data.transcript || '').trim();
+  if (!text) throw new Error('Aisha STT вернул пустой результат');
+  return text;
+}
 
 // ── Google Cloud Speech-to-Text v2 (Chirp 2) ───────────────────────────────
 
@@ -321,6 +369,12 @@ async function whisperTranscribe(buf, mime, lang) {
   form.append('language', lang);
   form.append('response_format', 'json');
   form.append('temperature', '0');
+
+  // Промпт-словарь исторических терминов для резкого снижения ошибок распознавания
+  const prompt = lang === 'uz'
+    ? "O'zbekiston tarixi, Amir Temur, Alisher Navoiy, Mirzo Ulug'bek, Bobur, Jaloliddin Manguberdi, Samarqand, Buxoro, Xiva, Toshkent, Qo'qon xonligi, jadidlar, darslik, maktab, qachon tug'ilgan, kim bo'lgan, qayerda"
+    : "История Узбекистана, Амир Темур, Тамерлан, Алишер Навои, Улугбек, Бабур, Самарканд, Бухара, Хива, Джалолиддин Мангуберди, Шёлковый путь, школьный учебник истории";
+  form.append('prompt', prompt);
 
   const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',

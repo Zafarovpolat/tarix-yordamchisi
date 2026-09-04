@@ -82,13 +82,34 @@ const FACTS_INDEX = factsDb.map((entry) => ({
 // границе слова, но слово может продолжаться после него не больше чем на
 // MAX_SUFFIX_LEN букв — это грамматическое окончание, а не другое слово:
 //   «тамерлан»   + «е»      -> «о тамерлане»    совпадает (русский падеж)
-//   «temuriylar» + «ning»   -> «temuriylarning» совпадает (узбекский аффикс)
-//   «микены»     + «частью» -> «микенычастью»   НЕ совпадает
-// Вопрос приходит уже с ведущим пробелом (padded) — так и первое слово вопроса
-// считается началом слова.
+// Вычисляет расстояние Левенштейна (редакционное расстояние) между двумя словами.
+// Нужно для устойчивости к опечаткам и погрешностям распознавания речи (STT):
+// "темир" -> "темур", "navoi" -> "navoiy", "ulugbek" -> "ulug'bek".
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > 2) return 99;
+  const row = [];
+  for (let j = 0; j <= b.length; j++) row[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i;
+    for (let j = 1; j <= b.length; j++) {
+      let cur = row[j - 1];
+      if (a[i - 1] !== b[j - 1]) {
+        cur = Math.min(row[j - 1], prev, row[j]) + 1;
+      }
+      row[j - 1] = prev;
+      prev = cur;
+    }
+    row[b.length] = prev;
+  }
+  return row[b.length];
+}
+
+// Проверяет, встречается ли ключ в вопросе КАК СЛОВО, а не как случайная
+// подстрока.
 function keywordMatches(padded, kw) {
   let from = 0;
-  for (;;) {
+  for (; ;) {
     const at = padded.indexOf(' ' + kw, from);
     if (at === -1) return false;
     const end = at + 1 + kw.length;
@@ -99,42 +120,11 @@ function keywordMatches(padded, kw) {
   }
 }
 
-// Ищет в базе фактов запись, наиболее релевантную вопросу. Осознанно без
-// эмбеддингов и векторного поиска — для базы на несколько сотен тем хватает
-// сравнения ключевых слов, зато нет ни одной лишней зависимости.
-//
-// Вес совпадения — ЕГО ДЛИНА В СИМВОЛАХ, а не единица. Раньше все совпадения
-// весили одинаково, поэтому запись, зацепившаяся коротким общим ключом,
-// выигрывала у записи с длинным конкретным ключом просто потому, что шла раньше
-// в базе. Теперь «когда родился амир темур» (24 символа) уверенно перебивает
-// случайное «микены» (6), а несколько совпадений внутри одной записи
-// складываются.
-function findInFactsDb(question, lang) {
-  const q = normalize(question);
-  if (!q) return null;
-  const padded = ' ' + q;
-  let best = null;
-  let bestScore = 0;
-  for (const row of FACTS_INDEX) {
-    let score = 0;
-    for (const kw of row[lang]) {
-      if (keywordMatches(padded, kw)) score += kw.length;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      best = row.entry;
-    }
-  }
-  return best;
-}
-
-// Наборы слов-филлеров — разговорных обёрток, которые сами по себе не несут
-// темы, но ломают полнотекстовый поиск Wikipedia (он считает «расскажи»,
-// «подробно», «haqida» значимыми словами и выдаёт по ним мусорные статьи —
-// проверено: «Подробно расскажи про Вторую мировую войну» находило
-// «Автобиографию Кристи»). Удаляем эти слова в ЛЮБОМ месте фразы, а не только
-// по краям, — так одинаково чисто обрабатываются и «Подробно расскажи про X»,
-// и «X haqida batafsil gapir». Узбекские слова храним с прямым апострофом (').
+// Ищет в базе фактов запись, наиболее релевантную вопросу.
+// Сначала пробует точный поиск по ключевым словам с суффиксами.
+// Если точного совпадения нет — применяет нечёткий поиск (допускает 1-2 ошибки
+// в буквах из-за акцента или опечаток речи).
+// Наборы слов-филлеров — разговорных обёрток
 const QUERY_FILLERS_RU = new Set([
   'подробно', 'подробнее', 'кратко', 'вкратце', 'коротко', 'расскажи', 'расскажите',
   'поведай', 'опиши', 'объясни', 'объясните', 'пожалуйста', 'про', 'об', 'обо', 'о',
@@ -148,6 +138,66 @@ const QUERY_FILLERS_UZ = new Set([
   'tushuntirib', 'ber', 'bering', 'nima', 'kim', 'qachon', 'qayerda', 'nega',
   'qanday', 'edi', "bo'lgan", "bo'ladi", 'menga', 'iltimos', 'va', 'uning',
 ]);
+
+// Ищет в базе фактов запись, наиболее релевантную вопросу.
+// Сначала пробует точный поиск по ключевым словам с суффиксами.
+// Если точного совпадения нет — применяет нечёткий поиск (допускает 1-2 ошибки
+// в буквах из-за акцента или опечаток речи).
+function findInFactsDb(question, lang) {
+  const q = normalize(question);
+  if (!q) return null;
+  const padded = ' ' + q;
+  let best = null;
+  let bestScore = 0;
+
+  // 1. Точный поиск (с суффиксами и аффиксами)
+  for (const row of FACTS_INDEX) {
+    let score = 0;
+    for (const kw of row[lang]) {
+      if (keywordMatches(padded, kw)) score += kw.length;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = row.entry;
+    }
+  }
+  if (bestScore >= MIN_KEYWORD_LEN) {
+    return best;
+  }
+
+  // 2. Нечёткий поиск (терпимость к опечаткам в 1-2 буквы без учёта филлеров)
+  const fillers = lang === 'uz' ? QUERY_FILLERS_UZ : QUERY_FILLERS_RU;
+  const qWords = q.split(' ').filter((w) => w.length >= 3 && !fillers.has(w));
+  if (!qWords.length) return null;
+
+  let fuzzyBest = null;
+  let fuzzyBestScore = 0;
+
+  for (const row of FACTS_INDEX) {
+    let score = 0;
+    for (const kw of row[lang]) {
+      const kwWords = kw.split(' ').filter((w) => w.length >= 3 && !fillers.has(w));
+      for (const qw of qWords) {
+        for (const kwW of kwWords) {
+          const maxDist = kwW.length >= 6 ? 2 : 1;
+          if (editDistance(qw, kwW) <= maxDist) {
+            score += kwW.length * (qw === kwW ? 2 : 1);
+          }
+        }
+      }
+    }
+    if (score > fuzzyBestScore) {
+      fuzzyBestScore = score;
+      fuzzyBest = row.entry;
+    }
+  }
+
+  if (fuzzyBestScore >= 10) {
+    return fuzzyBest;
+  }
+
+  return null;
+}
 
 // Приводит разговорный вопрос к чистому поисковому запросу для Wikipedia,
 // вырезая слова-филлеры (см. наборы выше). «Подробно расскажи про Вторую
@@ -290,15 +340,13 @@ exports.handler = async (event) => {
   // (без разговорных обёрток), но оригинальный вопрос сохраняем для модели.
   const searchQuery = cleanQuery(question, lang);
   console.log(`Поисковый запрос к Wikipedia: "${searchQuery}"`);
-  let wiki;
+  let wiki = null;
   try {
     wiki = await fetchWikiContext(searchQuery, lang);
     console.log('Wikipedia:', wiki ? `найдена статья "${wiki.title}" (${wiki.extract.length} симв.)` : 'ничего не найдено');
 
     // Узбекская Wikipedia намного меньше русской — если там не нашлось
-    // ничего внятного, пробуем русскую версию как источник. Модель всё
-    // равно отвечает на языке вопроса (см. системный промпт ниже), просто
-    // опираясь на более богатый источник фактов.
+    // ничего внятного, пробуем русскую версию как источник.
     const tooShort = wiki && wiki.extract.length < 200;
     if (lang === 'uz' && (!wiki || tooShort)) {
       const ruFallback = await fetchWikiContext(searchQuery, 'ru');
@@ -308,33 +356,48 @@ exports.handler = async (event) => {
       }
     }
   } catch (err) {
-    console.error('Ошибка запроса к Wikipedia:', err.message);
-    return json({ error: 'Wikipedia недоступна: ' + err.message }, 502, origin);
+    console.warn('Ошибка запроса к Wikipedia (переходим к Groq):', err.message);
   }
 
-  if (!wiki) {
+  let result = null;
+  // Сначала пробуем ответить по контексту статьи Википедии
+  if (wiki && wiki.extract) {
+    try {
+      result = await askGroq(question, lang, wiki.extract);
+      console.log('Ответ Groq (по Википедии):', JSON.stringify(result));
+    } catch (err) {
+      console.warn('Groq с контекстом Википедии дал сбой:', err.message);
+    }
+  }
+
+  // Если статья Википедии не найдена ИЛИ Groq вернул has_answer: false
+  // (контекст Википедии оказался нерелевантным) — спрашиваем Groq напрямую
+  // по его собственным историческим знаниям!
+  if (!result || !result.has_answer) {
+    try {
+      console.log('Запрашиваем ответ у Groq напрямую по его историческим знаниям...');
+      result = await askGroq(question, lang, null);
+      console.log('Ответ Groq (напрямую):', JSON.stringify(result));
+    } catch (err) {
+      console.error('Ошибка обращения к Groq API:', err.message);
+      return json({ error: 'Groq API недоступен: ' + err.message }, 502, origin);
+    }
+  }
+
+  if (!result || !result.has_answer) {
     return json({ has_answer: false }, 200, origin);
   }
 
-  let result;
-  try {
-    result = await askGroq(question, lang, wiki.extract);
-    console.log('Ответ Groq:', JSON.stringify(result));
-  } catch (err) {
-    console.error('Ошибка обращения к Groq API:', err.message);
-    return json({ error: 'Groq API недоступен: ' + err.message }, 502, origin);
-  }
-
+  const topicTitle = result.topic || (wiki ? wiki.title : question);
   const payload = {
     has_answer: result.has_answer,
     answer_text: result.answer_text,
-    topic: wiki.title,
-    photo_url: wiki.thumbnail,
-    source_url: wiki.sourceUrl,
-    source_label: 'Wikipedia',
+    topic: topicTitle,
+    photo_url: wiki ? wiki.thumbnail : null,
+    source_url: wiki ? wiki.sourceUrl : null,
+    source_label: wiki ? 'Wikipedia' : 'Tarix yordamchisi AI',
   };
-  // Кэшируем только удачные ответы: «не знаю» лучше перепроверить в следующий
-  // раз — Wikipedia могла просто не найти статью по неудачной формулировке.
+  // Кэшируем только удачные ответы
   if (result.has_answer) cacheSet(key, payload);
   return json(payload, 200, origin);
 };
